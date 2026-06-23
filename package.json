@@ -1,0 +1,17 @@
+{
+  "name": "ruth-manual-live-support",
+  "version": "1.0.0",
+  "private": true,
+  "description": "RUTH ISTANBUL manual live support panel and customer chat backend",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "vapid": "node scripts/generate-vapid-keys.js"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

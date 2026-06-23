@@ -1,0 +1,550 @@
+<!-- RUTH ISTANBUL Manuel Canlı Destek Widget Kodu -->
+<!-- Bu kodu ikas özel kod / Custom HTML alanına ekleyin. -->
+<script>
+  window.RUTH_MANUAL_CHAT = {
+    apiUrl: "https://ruthie-lmc5.onrender.com/api/chat",
+    updatesUrl: "https://ruthie-lmc5.onrender.com/api/chat/updates",
+    whatsappNumber: "908503469789",
+    brandName: "RUTH ISTANBUL",
+    supportName: "Canlı Destek",
+    logoUrl: "ruthie-atelier-avatar.png",
+    launcherUrl: "ruthie-gold-chat-launcher.png",
+    greetingText: "Selam! Yardım istersen buradayız.",
+    greetingDelayMs: 4500
+  };
+</script>
+
+<script>
+(() => {
+  const config = {
+    apiUrl: "",
+    updatesUrl: "",
+    whatsappNumber: "908503469789",
+    brandName: "RUTH ISTANBUL",
+    supportName: "Canlı Destek",
+    logoUrl: "",
+    launcherUrl: "",
+    greetingText: "Selam! Yardım istersen buradayız.",
+    greetingDelayMs: 4500,
+    ...window.RUTH_MANUAL_CHAT
+  };
+
+  if (document.getElementById("ruth-manual-chat-widget")) return;
+
+  const sessionKey = "ruth_ai_chat_session";
+  const historyKey = "ruth_manual_chat_history";
+  const lastAdminKey = "ruth_manual_chat_last_admin_at";
+  const createSessionId = () => `ruth_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+  const sessionId = getSessionId();
+  const seenMessageIds = new Set();
+  let selectedFile = null;
+  let pollTimer = null;
+
+  const css = `
+    #ruth-manual-chat-widget,
+    #ruth-manual-chat-widget * { box-sizing: border-box; }
+    #ruth-manual-chat-widget {
+      --ruth-gold: #d8b83f;
+      --ruth-gold-soft: #efe2a2;
+      --ruth-gold-dark: #a98419;
+      --ruth-ink: #050505;
+      --ruth-muted: #5f5f5f;
+      --ruth-line: rgba(5, 5, 5, 0.14);
+      --ruth-ui: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --ruth-serif: Georgia, "Times New Roman", Times, serif;
+      position: fixed;
+      right: calc(24px + env(safe-area-inset-right, 0px));
+      bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+      z-index: 2147483000;
+      color: var(--ruth-ink);
+      font-family: var(--ruth-ui);
+    }
+    #ruth-manual-chat-widget .ruth-panel {
+      position: absolute;
+      right: 0;
+      bottom: 86px;
+      display: grid;
+      width: min(380px, calc(100vw - 32px));
+      height: min(620px, calc(100dvh - 128px));
+      grid-template-rows: auto 1fr auto auto;
+      overflow: hidden;
+      border: 1px solid var(--ruth-line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 24px 66px rgba(0, 0, 0, 0.18);
+      opacity: 0;
+      transform: translateY(18px) scale(0.96);
+      transform-origin: 100% 100%;
+      pointer-events: none;
+      transition: opacity 220ms ease, transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+    }
+    #ruth-manual-chat-widget.ruth-open .ruth-panel {
+      opacity: 1;
+      transform: translateY(0) scale(1);
+      pointer-events: auto;
+    }
+    #ruth-manual-chat-widget .ruth-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      padding: 16px;
+      background: var(--ruth-ink);
+      color: #fff;
+    }
+    #ruth-manual-chat-widget .ruth-agent {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      min-width: 0;
+    }
+    #ruth-manual-chat-widget .ruth-logo {
+      width: 42px;
+      height: 42px;
+      flex: 0 0 auto;
+      display: grid;
+      place-items: center;
+      overflow: hidden;
+      border-radius: 50%;
+      background: var(--ruth-gold);
+      color: var(--ruth-ink);
+      font: 700 20px var(--ruth-serif);
+    }
+    #ruth-manual-chat-widget .ruth-logo img,
+    #ruth-manual-chat-widget .ruth-launcher img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+    #ruth-manual-chat-widget .ruth-agent-name {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 850;
+    }
+    #ruth-manual-chat-widget .ruth-agent-status {
+      margin: 3px 0 0;
+      color: var(--ruth-gold-soft);
+      font-size: 12px;
+      font-weight: 700;
+    }
+    #ruth-manual-chat-widget .ruth-close,
+    #ruth-manual-chat-widget .ruth-attach,
+    #ruth-manual-chat-widget .ruth-send,
+    #ruth-manual-chat-widget .ruth-launcher {
+      border: 0;
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+    }
+    #ruth-manual-chat-widget .ruth-close {
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.1);
+      color: #fff;
+      font-size: 22px;
+    }
+    #ruth-manual-chat-widget .ruth-messages {
+      overflow: auto;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 16px;
+      background: #faf8f0;
+    }
+    #ruth-manual-chat-widget .ruth-message {
+      max-width: 86%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--ruth-line);
+      background: #fff;
+      font-size: 14px;
+      line-height: 1.35;
+      white-space: pre-wrap;
+      animation: ruth-in 160ms ease-out;
+    }
+    #ruth-manual-chat-widget .ruth-message-user {
+      align-self: flex-end;
+      background: var(--ruth-gold);
+    }
+    #ruth-manual-chat-widget .ruth-message-agent {
+      align-self: flex-start;
+    }
+    #ruth-manual-chat-widget .ruth-message img {
+      display: block;
+      max-width: 220px;
+      width: 100%;
+      margin-top: 8px;
+      border-radius: 8px;
+    }
+    #ruth-manual-chat-widget .ruth-quick-actions {
+      display: flex;
+      gap: 8px;
+      overflow-x: auto;
+      padding: 12px 14px 0;
+      background: #fff;
+    }
+    #ruth-manual-chat-widget .ruth-quick-actions button {
+      flex: 0 0 auto;
+      border: 1px solid var(--ruth-line);
+      border-radius: 999px;
+      background: #fff;
+      padding: 8px 10px;
+      color: var(--ruth-ink);
+      font-weight: 800;
+      font-size: 12px;
+      cursor: pointer;
+    }
+    #ruth-manual-chat-widget .ruth-composer {
+      display: grid;
+      grid-template-columns: auto 1fr auto;
+      gap: 8px;
+      align-items: end;
+      padding: 12px;
+      border-top: 1px solid var(--ruth-line);
+      background: #fff;
+    }
+    #ruth-manual-chat-widget .ruth-field {
+      width: 100%;
+      min-height: 42px;
+      max-height: 90px;
+      border: 1px solid var(--ruth-line);
+      border-radius: 8px;
+      padding: 10px 12px;
+      resize: none;
+      outline: none;
+      font: inherit;
+    }
+    #ruth-manual-chat-widget .ruth-field:focus {
+      border-color: var(--ruth-gold-dark);
+      box-shadow: 0 0 0 3px rgba(216, 184, 63, 0.18);
+    }
+    #ruth-manual-chat-widget .ruth-attach,
+    #ruth-manual-chat-widget .ruth-send {
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: var(--ruth-gold);
+      color: var(--ruth-ink);
+      font-weight: 900;
+    }
+    #ruth-manual-chat-widget .ruth-file {
+      display: none;
+    }
+    #ruth-manual-chat-widget .ruth-launcher {
+      width: 72px;
+      height: 72px;
+      overflow: hidden;
+      border-radius: 50%;
+      background: var(--ruth-gold);
+      color: var(--ruth-ink);
+      box-shadow: 0 18px 42px rgba(0, 0, 0, 0.22);
+      font: 700 30px var(--ruth-serif);
+      animation: ruth-breathe 3.4s ease-in-out infinite;
+    }
+    #ruth-manual-chat-widget .ruth-tip {
+      position: absolute;
+      right: 84px;
+      bottom: 16px;
+      width: max-content;
+      max-width: min(260px, calc(100vw - 128px));
+      padding: 10px 12px;
+      border: 1px solid var(--ruth-line);
+      border-radius: 8px;
+      background: #fff;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.12);
+      opacity: 0;
+      transform: translateY(8px);
+      pointer-events: none;
+      transition: opacity 180ms ease, transform 180ms ease;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    #ruth-manual-chat-widget.ruth-tip-visible:not(.ruth-open) .ruth-tip {
+      opacity: 1;
+      transform: translateY(0);
+    }
+    @keyframes ruth-breathe {
+      0%,100% { transform: scale(1); }
+      50% { transform: scale(1.045); }
+    }
+    @keyframes ruth-in {
+      from { opacity: 0; transform: translateY(6px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    @media (max-width: 560px) {
+      #ruth-manual-chat-widget {
+        right: calc(16px + env(safe-area-inset-right, 0px));
+        bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+      }
+      #ruth-manual-chat-widget .ruth-panel {
+        position: fixed;
+        inset: auto 10px calc(96px + env(safe-area-inset-bottom, 0px)) 10px;
+        width: auto;
+        height: min(620px, calc(100dvh - 128px));
+      }
+      #ruth-manual-chat-widget .ruth-launcher {
+        width: 66px;
+        height: 66px;
+      }
+    }
+  `;
+
+  const root = document.createElement("div");
+  root.id = "ruth-manual-chat-widget";
+  root.innerHTML = `
+    <style>${css}</style>
+    <section class="ruth-panel" aria-label="RUTH ISTANBUL canlı destek">
+      <header class="ruth-header">
+        <div class="ruth-agent">
+          <div class="ruth-logo" data-ruth-logo>R</div>
+          <div>
+            <p class="ruth-agent-name">${escapeHtml(config.brandName)}</p>
+            <p class="ruth-agent-status">Canlı destek ekibine yazıyorsunuz</p>
+          </div>
+        </div>
+        <button class="ruth-close" type="button" aria-label="Kapat">×</button>
+      </header>
+      <div class="ruth-messages" data-ruth-messages></div>
+      <div class="ruth-quick-actions">
+        <button type="button" data-ruth-prompt="Merhaba, ürün hakkında bilgi almak istiyorum.">Ürün bilgisi</button>
+        <button type="button" data-ruth-prompt="Siparişim hakkında destek almak istiyorum.">Sipariş</button>
+        <button type="button" data-ruth-prompt="Beden konusunda yardım alabilir miyim?">Beden</button>
+      </div>
+      <form class="ruth-composer">
+        <button class="ruth-attach" type="button" aria-label="Fotoğraf ekle">+</button>
+        <textarea class="ruth-field" rows="1" placeholder="Mesajınızı yazın..."></textarea>
+        <button class="ruth-send" type="submit" aria-label="Gönder">↗</button>
+        <input class="ruth-file" type="file" accept="image/png,image/jpeg,image/webp,image/gif">
+      </form>
+    </section>
+    <div class="ruth-tip">${escapeHtml(config.greetingText)}</div>
+    <button class="ruth-launcher" type="button" aria-label="Canlı desteği aç" data-ruth-launcher>R</button>
+  `;
+
+  document.body.appendChild(root);
+
+  const messages = root.querySelector("[data-ruth-messages]");
+  const form = root.querySelector("form");
+  const input = root.querySelector(".ruth-field");
+  const fileInput = root.querySelector(".ruth-file");
+  const logo = root.querySelector("[data-ruth-logo]");
+  const launcher = root.querySelector("[data-ruth-launcher]");
+
+  setImageIfAvailable(logo, config.logoUrl);
+  setImageIfAvailable(launcher, config.launcherUrl);
+  restoreHistory();
+  if (!messages.children.length) {
+    addMessage("agent", "Merhaba, RUTH ISTANBUL canlı destek ekibine yazıyorsunuz. Nasıl yardımcı olabiliriz?", { persist: true });
+  }
+
+  setTimeout(() => root.classList.add("ruth-tip-visible"), Number(config.greetingDelayMs || 4500));
+
+  launcher.addEventListener("click", () => {
+    root.classList.add("ruth-open");
+    root.classList.remove("ruth-tip-visible");
+    startPolling();
+    setTimeout(() => input.focus(), 80);
+  });
+
+  root.querySelector(".ruth-close").addEventListener("click", () => {
+    root.classList.remove("ruth-open");
+    stopPolling();
+  });
+
+  root.querySelectorAll("[data-ruth-prompt]").forEach((button) => {
+    button.addEventListener("click", () => {
+      input.value = button.getAttribute("data-ruth-prompt");
+      form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+  });
+
+  root.querySelector(".ruth-attach").addEventListener("click", () => fileInput.click());
+  fileInput.addEventListener("change", () => {
+    selectedFile = fileInput.files && fileInput.files[0] ? fileInput.files[0] : null;
+    if (selectedFile) addMessage("user", `Fotoğraf eklendi: ${selectedFile.name}`, { persist: true });
+  });
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text && !selectedFile) return;
+    input.value = "";
+    if (text) addMessage("user", text, { persist: true });
+    const waiting = addMessage("agent", "Mesajınız iletiliyor...");
+    try {
+      const image = selectedFile ? await fileToPayload(selectedFile) : null;
+      selectedFile = null;
+      fileInput.value = "";
+      const result = await sendMessage(text, image);
+      waiting.remove();
+      addMessage("agent", result.message || "Mesajınız ekibimize ulaştı.", { persist: true });
+      await pollUpdates();
+    } catch (error) {
+      waiting.remove();
+      selectedFile = null;
+      fileInput.value = "";
+      addMessage("agent", "Mesajınız şu an iletilemedi. İsterseniz WhatsApp üzerinden de yazabilirsiniz.", { persist: true });
+      addWhatsApp(text);
+    }
+  });
+
+  async function sendMessage(message, image) {
+    const response = await fetch(requiredUrl(config.apiUrl), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        message,
+        image,
+        visitorName: getVisitorName(),
+        pageUrl: window.location.href,
+        pageTitle: document.title
+      }),
+      credentials: "omit"
+    });
+    if (!response.ok) throw new Error("support_request_failed");
+    return response.json();
+  }
+
+  async function pollUpdates() {
+    const updatesUrl = getUpdatesUrl();
+    if (!updatesUrl) return;
+    const after = localStorage.getItem(lastAdminKey) || "";
+    const url = `${updatesUrl}?sessionId=${encodeURIComponent(sessionId)}&after=${encodeURIComponent(after)}`;
+    const response = await fetch(url, { credentials: "omit" });
+    if (!response.ok) return;
+    const result = await response.json();
+    let latest = after;
+    (result.messages || []).forEach((message) => {
+      if (seenMessageIds.has(message.id)) return;
+      seenMessageIds.add(message.id);
+      addMessage("agent", message.body || "", { persist: true });
+      if (!latest || String(message.createdAt) > latest) latest = message.createdAt;
+    });
+    if (latest) localStorage.setItem(lastAdminKey, latest);
+  }
+
+  function startPolling() {
+    stopPolling();
+    pollUpdates();
+    pollTimer = setInterval(pollUpdates, 4000);
+  }
+
+  function stopPolling() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  function addMessage(type, text, options = {}) {
+    const item = document.createElement("div");
+    item.className = `ruth-message ruth-message-${type}`;
+    item.textContent = text;
+    messages.appendChild(item);
+    messages.scrollTop = messages.scrollHeight;
+    if (options.persist) persistMessage(type, text);
+    return item;
+  }
+
+  function addWhatsApp(text) {
+    const item = document.createElement("div");
+    item.className = "ruth-message ruth-message-agent";
+    item.innerHTML = `<a href="${whatsappUrl(text)}" target="_blank" rel="noreferrer">WhatsApp destek hattına geç</a>`;
+    messages.appendChild(item);
+  }
+
+  function persistMessage(type, text) {
+    try {
+      const history = JSON.parse(localStorage.getItem(historyKey) || "[]");
+      history.push({ type, text, at: new Date().toISOString() });
+      localStorage.setItem(historyKey, JSON.stringify(history.slice(-80)));
+    } catch (error) {}
+  }
+
+  function restoreHistory() {
+    try {
+      const history = JSON.parse(localStorage.getItem(historyKey) || "[]");
+      history.forEach((item) => addMessage(item.type, item.text));
+    } catch (error) {}
+  }
+
+  function getSessionId() {
+    try {
+      const existing = localStorage.getItem(sessionKey);
+      if (existing) return existing;
+      const next = createSessionId();
+      localStorage.setItem(sessionKey, next);
+      return next;
+    } catch (error) {
+      return createSessionId();
+    }
+  }
+
+  function getVisitorName() {
+    try {
+      const history = JSON.parse(localStorage.getItem(historyKey) || "[]");
+      const possible = history.find((item) => item.type === "user" && isLikelyName(item.text));
+      return possible ? possible.text.slice(0, 60) : "";
+    } catch (error) {
+      return "";
+    }
+  }
+
+  function isLikelyName(value) {
+    const text = String(value || "").trim();
+    if (text.length < 2 || text.length > 60) return false;
+    if (/[?!.:,;@#0-9]/.test(text)) return false;
+    return !/(merhaba|selam|sipariş|siparis|ürün|urun|beden|stok|kargo|iade|fiyat|whatsapp)/i.test(text);
+  }
+
+  function getUpdatesUrl() {
+    if (isUrl(config.updatesUrl)) return config.updatesUrl;
+    if (isUrl(config.apiUrl)) return config.apiUrl.replace(/\/api\/chat\/?$/i, "/api/chat/updates");
+    return "";
+  }
+
+  function requiredUrl(value) {
+    if (!isUrl(value)) throw new Error("missing_api_url");
+    return value;
+  }
+
+  function isUrl(value) {
+    return /^https?:\/\//i.test(String(value || ""));
+  }
+
+  function setImageIfAvailable(target, url) {
+    if (!url || /BURAYA|YOUR_|RUTHIE_/i.test(url)) return;
+    const img = document.createElement("img");
+    img.src = url;
+    img.alt = "";
+    img.onerror = () => img.remove();
+    target.textContent = "";
+    target.appendChild(img);
+  }
+
+  function fileToPayload(file) {
+    return new Promise((resolve, reject) => {
+      if (!/^image\//.test(file.type || "")) return reject(new Error("not_image"));
+      if (file.size > 2_000_000) return reject(new Error("image_too_large"));
+      const reader = new FileReader();
+      reader.onload = () => resolve({ name: file.name, mime: file.type, data: reader.result });
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function whatsappUrl(text) {
+    const message = `Merhaba, RUTH ISTANBUL canlı destekten yazıyorum.${text ? ` Konu: ${text}` : ""}`;
+    return `https://wa.me/${config.whatsappNumber}?text=${encodeURIComponent(message)}`;
+  }
+
+  function escapeHtml(value) {
+    return String(value || "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+})();
+</script>
