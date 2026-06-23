@@ -32,6 +32,7 @@ if (webPush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY) {
 
 let storage;
 let reminderTimer = null;
+const adminTypingState = new Map();
 
 const server = http.createServer(async (req, res) => {
   setCors(res);
@@ -195,6 +196,7 @@ async function handleCustomerUpdates(url, res) {
     ok: true,
     conversationId: conversation.id,
     messages: visibleMessages,
+    adminTyping: isAdminTyping(conversation.id),
     serverTime: new Date().toISOString()
   });
 }
@@ -223,9 +225,29 @@ async function handleAdminApi(req, res, url) {
     });
   }
 
+  if (req.method === "GET" && pathname === "/api/admin/ikas/summary") {
+    return sendJson(res, {
+      ok: true,
+      connected: Boolean(process.env.IKAS_API_TOKEN || process.env.IKAS_CLIENT_ID || process.env.IKAS_CLIENT_SECRET),
+      message: "ikas API bilgileri eklenince canlı sipariş verisi burada gösterilecek.",
+      totals: { orders: 0, units: 0, revenue: 0 },
+      productTotals: [],
+      orders: []
+    });
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/conversations") {
     const items = await storage.listConversations();
     return sendJson(res, { ok: true, conversations: items.map(adminConversation) });
+  }
+
+  const typingMatch = pathname.match(/^\/api\/admin\/conversations\/([^/]+)\/typing$/);
+  if (req.method === "POST" && typingMatch) {
+    const body = await readJson(req);
+    const conversation = await storage.getConversation(typingMatch[1]);
+    if (!conversation) return sendJson(res, { ok: false, error: "not_found" }, 404);
+    setAdminTyping(conversation.id, body.typing === true);
+    return sendJson(res, { ok: true, typing: isAdminTyping(conversation.id) });
   }
 
   const messagesMatch = pathname.match(/^\/api\/admin\/conversations\/([^/]+)\/messages$/);
@@ -262,6 +284,8 @@ async function handleAdminApi(req, res, url) {
       imageData: "",
       createdAt: now
     });
+
+    setAdminTyping(conversation.id, false);
 
     conversation = await storage.updateConversation(conversation.id, {
       lastAdminMessageAt: now,
@@ -376,6 +400,25 @@ async function handleAdminApi(req, res, url) {
   }
 
   sendJson(res, { ok: false, error: "not_found" }, 404);
+}
+
+function setAdminTyping(conversationId, typing) {
+  if (!conversationId) return;
+  if (typing) {
+    adminTypingState.set(String(conversationId), { typing: true, updatedAt: Date.now() });
+  } else {
+    adminTypingState.delete(String(conversationId));
+  }
+}
+
+function isAdminTyping(conversationId) {
+  const state = adminTypingState.get(String(conversationId));
+  if (!state) return false;
+  if (Date.now() - Number(state.updatedAt || 0) > 7000) {
+    adminTypingState.delete(String(conversationId));
+    return false;
+  }
+  return true;
 }
 
 async function notifyAdmins(payload) {
@@ -705,584 +748,220 @@ function adminHtml() {
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="theme-color" content="#050505">
+  <meta name="theme-color" content="#08090b">
   <link rel="manifest" href="/manifest.webmanifest">
   <title>RUTH ISTANBUL Panel</title>
   <style>
-    :root{--gold:#d8b83f;--gold2:#efe2a2;--ink:#050505;--muted:#666;--line:rgba(5,5,5,.12);--bg:#faf8f0;--white:#fff}
-    *{box-sizing:border-box}
-    body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
-    button,input,textarea{font:inherit}
-    .top{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;background:var(--ink);color:white}
-    .brand{display:flex;align-items:center;gap:10px;font-weight:900;letter-spacing:.04em}
-    .mark{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:var(--gold);color:var(--ink);font-family:Georgia,serif;font-weight:900}
-    .wrap{display:grid;grid-template-columns:340px 1fr;min-height:calc(100dvh - 62px)}
-    .sidebar{border-right:1px solid var(--line);background:white;overflow:auto}
-    .main{display:grid;grid-template-rows:auto 1fr auto;min-width:0}
-    .toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:12px;border-bottom:1px solid var(--line);background:white}
-    .btn{border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:white;cursor:pointer;font-weight:800}
-    .btn.primary{background:var(--gold);border-color:var(--gold);color:var(--ink)}
-    .btn.danger{background:#1f1f1f;color:#fff}
-    .btn:disabled{opacity:.55;cursor:not-allowed}
-    .login{max-width:420px;margin:80px auto;padding:24px;background:white;border:1px solid var(--line);border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.12)}
-    .login h1{margin:0 0 16px;font-size:24px}
-    label{display:block;margin:12px 0 6px;font-weight:800}
-    input,textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px 12px;background:white;outline:none}
-    textarea{resize:vertical;min-height:48px;max-height:160px}
-    input:focus,textarea:focus{border-color:#a98419;box-shadow:0 0 0 3px rgba(216,184,63,.2)}
-    .conversation{padding:13px 14px;border-bottom:1px solid var(--line);cursor:pointer}
-    .conversation:hover,.conversation.active{background:#fbf4d8}
-    .row{display:flex;justify-content:space-between;gap:10px;align-items:center}
-    .name{font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .badge{min-width:22px;height:22px;border-radius:999px;background:var(--gold);display:grid;place-items:center;font-size:12px;font-weight:900}
-    .preview{margin-top:6px;font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-    .time{font-size:11px;color:var(--muted);white-space:nowrap}
-    .empty{padding:28px;color:var(--muted);text-align:center}
-    .messages{padding:16px;overflow:auto;display:flex;flex-direction:column;gap:10px}
-    .msg{max-width:min(680px,88%);padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:white;white-space:pre-wrap;line-height:1.38}
-    .msg.customer{align-self:flex-start}
-    .msg.admin{align-self:flex-end;background:var(--gold)}
-    .msg.system{align-self:center;background:#eee}
-    .msg img{display:block;max-width:260px;width:100%;margin-top:8px;border-radius:10px}
-    .meta{font-size:11px;color:var(--muted);margin-top:6px}
-    .composer{display:flex;gap:8px;padding:12px;background:white;border-top:1px solid var(--line)}
-    .composer textarea{min-height:46px}
-    .hidden{display:none!important}
-    .error{margin-top:12px;color:#a40000;font-weight:800}
-    .note{font-size:13px;color:var(--muted)}
-    @media(max-width:780px){
-      .wrap{grid-template-columns:1fr;min-height:calc(100dvh - 62px)}
-      .sidebar{display:block;max-height:42dvh;border-right:0;border-bottom:1px solid var(--line)}
-      .main{min-height:58dvh}
-      .top{padding:12px}
+    :root{
+      --bg:#050607;
+      --bg-soft:#0a0b0d;
+      --sidebar:#090a0c;
+      --panel:#111215;
+      --panel-2:#15171a;
+      --panel-3:#1a1c20;
+      --line:#272a30;
+      --line-soft:#1d2025;
+      --text:#f7f2e8;
+      --text-2:#d8d2c7;
+      --muted:#8b8479;
+      --muted-2:#68625b;
+      --gold:#d4a237;
+      --gold-2:#f0c66b;
+      --gold-3:#9f7327;
+      --gold-soft:rgba(212,162,55,.16);
+      --green:#3bc77a;
+      --danger:#ef6464;
+      --shadow:0 18px 55px rgba(0,0,0,.42);
+      --sidebar-w:282px;
+      --top-h:68px;
+      --radius:14px;
+      color-scheme:dark;
     }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      overflow:hidden;
+      background:radial-gradient(circle at 72% 5%,rgba(212,162,55,.095),transparent 32%),linear-gradient(180deg,#090a0c 0%,#050607 55%,#030404 100%);
+      color:var(--text);
+      font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,Arial,sans-serif;
+      font-size:14px;
+      letter-spacing:-.011em;
+    }
+    body:before{content:"";position:fixed;inset:0;pointer-events:none;background:linear-gradient(90deg,rgba(255,255,255,.028) 1px,transparent 1px),linear-gradient(rgba(255,255,255,.022) 1px,transparent 1px);background-size:48px 48px;mask-image:linear-gradient(to bottom,rgba(0,0,0,.65),transparent 72%);opacity:.6}
+    button,input,textarea{font:inherit;color:inherit}
+    button{cursor:pointer;touch-action:manipulation}
+    .hidden{display:none!important}
+    .login-page{min-height:100dvh;display:grid;place-items:center;padding:22px;background:radial-gradient(circle at 50% 18%,rgba(212,162,55,.18),transparent 31%)}
+    .login-card{width:min(420px,100%);border:1px solid rgba(212,162,55,.24);background:linear-gradient(180deg,rgba(20,22,25,.92),rgba(7,8,10,.96));border-radius:18px;padding:28px;box-shadow:var(--shadow);animation:rise .32s ease both}
+    .brand{display:flex;align-items:center;gap:13px;min-width:0}
+    .brand-mark{width:44px;height:44px;border-radius:50%;display:grid;place-items:center;background:#08090b;border:1px solid rgba(212,162,55,.55);box-shadow:inset 0 0 0 1px rgba(255,255,255,.04),0 0 28px rgba(212,162,55,.09);color:var(--gold-2);font:700 30px Georgia,"Times New Roman",serif;flex:0 0 auto}
+    .brand-word{font-family:Georgia,"Times New Roman",serif;letter-spacing:.12em;text-transform:uppercase;font-size:18px;color:#e8c679;white-space:nowrap}
+    .brand-sub{font-size:12px;color:var(--muted);margin-top:2px}
+    .login-card h1{margin:28px 0 8px;font-size:28px;line-height:1.05;letter-spacing:-.045em;font-weight:780}
+    .login-card p{margin:0 0 22px;color:var(--muted);line-height:1.55}
+    .field{display:grid;gap:7px;margin:13px 0}.field label{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.12em;font-weight:750}
+    .input,.textarea{width:100%;border:1px solid var(--line);border-radius:12px;background:#090a0c;color:var(--text);outline:none;padding:12px 13px;transition:border .18s,box-shadow .18s,background .18s}.textarea{resize:none;min-height:88px;max-height:180px}.input:focus,.textarea:focus{border-color:rgba(212,162,55,.62);box-shadow:0 0 0 4px rgba(212,162,55,.10);background:#0f1012}.error{min-height:20px;color:#ffaaa4;font-size:13px;margin-top:8px}
+    .app{height:100dvh;display:grid;grid-template-columns:var(--sidebar-w) minmax(0,1fr);background:transparent}.app.nav-mini{--sidebar-w:78px}.sidebar{display:grid;grid-template-rows:var(--top-h) 1fr auto;min-width:0;background:linear-gradient(180deg,rgba(12,13,15,.96),rgba(6,7,8,.96));border-right:1px solid var(--line);z-index:40;transition:transform .2s, width .2s}.side-head{height:var(--top-h);display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid var(--line)}.app.nav-mini .side-head{justify-content:center;padding:0}.app.nav-mini .brand-copy,.app.nav-mini .nav-label,.app.nav-mini .nav-badge,.app.nav-mini .nav-heading,.app.nav-mini .side-foot span{display:none}.app.nav-mini .nav-item{justify-content:center;padding:12px}.nav{overflow:auto;padding:12px 10px}.nav-heading{padding:18px 10px 8px;color:#7d7569;font-size:12px;letter-spacing:.11em;text-transform:uppercase;font-weight:720}.nav-item{width:100%;border:1px solid transparent;border-radius:8px;background:transparent;color:#d6d1c8;display:flex;align-items:center;gap:12px;padding:12px 14px;text-decoration:none;font-weight:620;letter-spacing:-.01em;transition:background .15s,border-color .15s,transform .15s,color .15s}.nav-item:hover{background:rgba(255,255,255,.045);border-color:var(--line);transform:translateX(2px);color:#fff}.nav-item.active{background:linear-gradient(90deg,rgba(212,162,55,.18),rgba(212,162,55,.06));border-color:rgba(212,162,55,.22);color:#fff}.nav-ico{width:20px;height:20px;display:grid;place-items:center;color:var(--gold-2);flex:0 0 auto}.nav-ico svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.9}.nav-badge{margin-left:auto;min-width:28px;height:22px;border-radius:999px;background:#f0c66b;color:#100b04;display:grid;place-items:center;font-size:12px;font-weight:850;padding:0 7px}.side-foot{border-top:1px solid var(--line);padding:12px;display:grid;gap:8px}.main{display:grid;grid-template-rows:var(--top-h) minmax(0,1fr);min-width:0}.topbar{height:var(--top-h);display:flex;align-items:center;justify-content:space-between;gap:14px;border-bottom:1px solid var(--line);background:rgba(7,8,10,.78);backdrop-filter:blur(18px);padding:0 22px;z-index:20}.top-left{display:flex;align-items:center;gap:14px}.crumb-title{font-size:15px;font-weight:730}.top-actions{display:flex;align-items:center;gap:12px}.top-icon{width:38px;height:38px;border:0;background:transparent;border-radius:10px;color:#d5cec2;display:grid;place-items:center;position:relative}.top-icon:hover{background:rgba(255,255,255,.05)}.top-dot{position:absolute;right:4px;top:3px;min-width:18px;height:18px;border-radius:999px;background:#f0c66b;color:#0c0803;font-size:11px;font-weight:850;display:grid;place-items:center}.profile{display:flex;align-items:center;gap:12px;min-width:0}.avatar{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;border:1px solid rgba(212,162,55,.50);background:#08090b;color:var(--gold-2);font:700 25px Georgia,"Times New Roman",serif}.profile-name{font-weight:760}.profile-role{font-size:12px;color:var(--muted)}.mobile-menu{display:none}.icon-btn,.btn{border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.032);color:var(--text);display:inline-flex;align-items:center;justify-content:center;gap:8px;font-weight:700;transition:transform .16s,border-color .16s,background .16s,box-shadow .16s}.icon-btn{width:38px;height:38px;padding:0}.btn{padding:10px 14px}.btn:hover,.icon-btn:hover{transform:translateY(-1px);border-color:rgba(212,162,55,.36);background:rgba(255,255,255,.055);box-shadow:0 12px 28px rgba(0,0,0,.18)}.btn.gold{background:linear-gradient(180deg,#efc86b,#b9862a);border-color:#c99737;color:#130c03}.btn.ghost{background:transparent}.btn.full{width:100%}.btn:disabled{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}.content{overflow:auto;padding:20px 24px 26px}.page{display:none;animation:fade .18s ease both}.page.active{display:block}.layout-overview{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:18px}.welcome{height:122px;border:1px solid var(--line);border-radius:8px;background:linear-gradient(135deg,rgba(255,255,255,.045),rgba(255,255,255,.015));display:flex;align-items:center;justify-content:space-between;padding:24px 28px;margin-bottom:18px;box-shadow:0 18px 45px rgba(0,0,0,.18)}.welcome h1{margin:0 0 10px;font-size:28px;line-height:1.05;letter-spacing:-.046em;font-weight:780}.welcome p{margin:0;color:var(--muted)}.date-pill{border:1px solid var(--line);border-radius:8px;background:#0c0d0f;padding:12px 16px;color:#f0eee8;min-width:178px;display:flex;align-items:center;justify-content:space-between}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:16px}.metric{height:126px;border:1px solid var(--line);border-radius:8px;background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));padding:18px 18px;position:relative;overflow:hidden}.metric:after{content:"";position:absolute;right:16px;bottom:15px;width:58px;height:24px;border-bottom:2px solid var(--gold);border-right:2px solid var(--gold);transform:skew(-32deg) rotate(-10deg);opacity:.9}.metric-row{display:flex;align-items:center;gap:14px}.metric-ico,.module-ico{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(212,162,55,.14);border:1px solid rgba(212,162,55,.20);color:var(--gold-2)}.metric-label{color:#bdb6ab;font-size:13px;margin-bottom:4px}.metric-num{font-size:27px;font-weight:780;letter-spacing:-.035em}.metric-sub{margin-top:10px;color:#c4beb4;font-size:13px}.modules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:16px}.module{min-height:220px;border:1px solid rgba(212,162,55,.22);border-radius:8px;background:radial-gradient(circle at 50% 0%,rgba(212,162,55,.08),transparent 38%),linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.012));display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:26px;transition:transform .16s,border-color .16s,box-shadow .16s}.module:hover{transform:translateY(-3px);border-color:rgba(212,162,55,.50);box-shadow:0 22px 60px rgba(0,0,0,.25)}.module h3{margin:15px 0 9px;font-size:17px;letter-spacing:.01em}.module p{margin:0;color:#d5cec4;line-height:1.55}.module .btn{margin-top:20px;min-width:184px}.bottom-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.card{border:1px solid var(--line);border-radius:8px;background:rgba(15,16,19,.82);padding:18px;min-width:0}.card-title{font-size:16px;font-weight:780;margin-bottom:14px}.list{display:grid;gap:10px}.mini-row,.conversation,.customer-row,.product-row,.order-row,.quick-row,.note{border:1px solid transparent;border-radius:8px;padding:10px 12px;background:rgba(255,255,255,.018)}.conversation,.customer-row{cursor:pointer}.conversation:hover,.customer-row:hover,.quick-row:hover{background:rgba(255,255,255,.04);border-color:var(--line)}.conversation.active,.customer-row.active{border-color:rgba(212,162,55,.30);background:rgba(212,162,55,.10)}.row{display:flex;align-items:center;justify-content:space-between;gap:10px}.name{font-weight:730;color:#f4f0e9}.preview{font-size:12px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.time{font-size:12px;color:var(--muted)}.badge{display:inline-grid;place-items:center;min-width:22px;height:22px;border-radius:999px;background:#f0c66b;color:#100b04;font-size:12px;font-weight:850;padding:0 7px}.empty{color:var(--muted);padding:18px;text-align:center}.right-rail{display:grid;gap:14px;align-content:start}.quick-row{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;padding:14px}.quick-left{display:flex;align-items:center;gap:12px}.rail-product{display:grid;grid-template-columns:48px minmax(0,1fr);gap:12px;align-items:center}.prod-img{width:48px;height:48px;border-radius:6px;background:linear-gradient(135deg,#2b2d31,#111215);border:1px solid var(--line);display:grid;place-items:center;color:var(--gold-2);overflow:hidden}.prod-img img{width:100%;height:100%;object-fit:cover}.page-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:16px}.page-title{font-size:27px;line-height:1.1;letter-spacing:-.045em;font-weight:780}.page-sub{color:var(--muted);margin-top:6px}.support-grid{display:grid;grid-template-columns:330px minmax(0,1fr) 300px;gap:14px;height:calc(100dvh - 128px)}.crm-grid{display:grid;grid-template-columns:360px minmax(0,1fr);gap:14px;height:calc(100dvh - 128px)}.orders-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(360px,.8fr);gap:14px}.panel{border:1px solid var(--line);border-radius:8px;background:rgba(15,16,19,.82);min-width:0;overflow:hidden;display:flex;flex-direction:column}.panel-head{padding:16px 17px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}.panel-title{font-weight:780}.panel-body{padding:14px;overflow:auto;min-height:0}.message-space{flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:12px}.msg{max-width:72%;border:1px solid var(--line);border-radius:12px;padding:11px 12px;line-height:1.45;background:#17191d;color:#f4f0ea}.msg.admin{align-self:flex-end;background:linear-gradient(180deg,#d9ac4a,#b88227);color:#100b03;border-color:#c49133}.msg.customer,.msg.system{align-self:flex-start}.msg img{display:block;max-width:240px;border-radius:9px;margin-top:8px}.meta{font-size:11px;opacity:.65;margin-top:7px}.composer{border-top:1px solid var(--line);padding:14px;display:grid;grid-template-columns:1fr auto;gap:10px}.info-line{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line-soft);padding:12px 0;gap:12px}.info-line span:first-child{color:var(--muted)}.note.done{opacity:.58}.note-body{line-height:1.45}.note-meta{font-size:12px;color:var(--muted);margin-top:8px}.product-row,.order-row{display:grid;grid-template-columns:54px minmax(0,1fr) auto;gap:12px;align-items:center;padding:13px}.qty{font-size:22px;font-weight:780;color:var(--gold-2)}.footer-logo{margin:22px 0 4px;text-align:center;color:#7a5f27;font-family:Georgia,"Times New Roman",serif;letter-spacing:.25em}.toast{position:fixed;right:24px;bottom:24px;padding:12px 14px;border-radius:10px;border:1px solid rgba(212,162,55,.25);background:#121317;color:#fff;box-shadow:var(--shadow);z-index:80;opacity:0;transform:translateY(12px);transition:opacity .18s,transform .18s}.toast.show{opacity:1;transform:translateY(0)}.drawer-shade{display:none}
+    @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+    @media(max-width:1180px){.layout-overview{grid-template-columns:1fr}.right-rail{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(2,1fr)}.modules,.bottom-grid{grid-template-columns:1fr}.support-grid,.crm-grid,.orders-grid{grid-template-columns:1fr;height:auto}.panel{min-height:360px}}
+    @media(max-width:820px){body{overflow:auto}.app{display:block;height:auto;min-height:100dvh}.sidebar{position:fixed;left:0;top:0;bottom:0;width:286px;transform:translateX(-104%);box-shadow:var(--shadow)}.app.mobile-open .sidebar{transform:translateX(0)}.drawer-shade{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:35}.app.mobile-open .drawer-shade{display:block}.main{min-height:100dvh}.topbar{padding:0 14px}.mobile-menu{display:grid}.top-actions .top-icon:nth-child(1),.profile-copy{display:none}.content{padding:14px}.welcome{height:auto;display:block;padding:20px}.date-pill{margin-top:16px;width:100%}.metrics{grid-template-columns:1fr}.right-rail{grid-template-columns:1fr}.support-grid,.crm-grid{gap:12px}.modules{gap:12px}.module{min-height:170px}.bottom-grid{gap:12px}.message-space{min-height:360px}.msg{max-width:88%}}
   </style>
 </head>
 <body>
-  <div id="login" class="login">
-    <div class="brand"><div class="mark">R</div><div>RUTH ISTANBUL</div></div>
-    <h1>Canlı Destek Paneli</h1>
-    <label>Kullanıcı adı</label>
-    <input id="username" autocomplete="username" value="ruth">
-    <label>Şifre</label>
-    <input id="password" type="password" autocomplete="current-password">
-    <button id="loginBtn" class="btn primary" style="width:100%;margin-top:16px">Giriş yap</button>
-    <div id="loginError" class="error"></div>
-  </div>
+  <section id="loginPage" class="login-page">
+    <form id="loginForm" class="login-card">
+      <div class="brand"><div class="brand-mark">R</div><div><div class="brand-word">RUTH ISTANBUL</div><div class="brand-sub">Yönetim Paneli</div></div></div>
+      <h1>Panele giriş yap</h1>
+      <p>Canlı destek, CRM notları ve sipariş özetlerini tek yerden yönet.</p>
+      <div class="field"><label>Kullanıcı adı</label><input id="loginUser" class="input" autocomplete="username" required></div>
+      <div class="field"><label>Şifre</label><input id="loginPass" class="input" type="password" autocomplete="current-password" required></div>
+      <button class="btn gold full" type="submit">Giriş Yap</button>
+      <div id="loginError" class="error"></div>
+    </form>
+  </section>
 
-  <div id="app" class="hidden">
-    <div class="top">
-      <div class="brand"><div class="mark">R</div><div>RUTH ISTANBUL Panel</div></div>
-      <div class="row">
-        <button id="pushBtn" class="btn">Bildirim aç</button>
-        <button id="logoutBtn" class="btn danger">Çıkış</button>
-      </div>
-    </div>
-    <div class="wrap">
-      <aside class="sidebar">
-        <div class="toolbar">
-          <strong>Mesajlar</strong>
-          <button id="refreshBtn" class="btn">Yenile</button>
-        </div>
-        <div id="conversations"><div class="empty">Konuşmalar yükleniyor...</div></div>
-      </aside>
-      <main class="main">
-        <div class="toolbar">
-          <div>
-            <strong id="activeTitle">Konuşma seç</strong>
-            <div id="activeSub" class="note"></div>
+  <section id="app" class="app hidden">
+    <div id="drawerShade" class="drawer-shade"></div>
+    <aside class="sidebar">
+      <div class="side-head"><div class="brand-mark">R</div><div class="brand-copy"><div class="brand-word">RUTH ISTANBUL</div></div></div>
+      <nav class="nav">
+        <button class="nav-item active" data-route="overview"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10.5V20h5v-5h4v5h5v-9.5"/></svg></span><span class="nav-label">Genel Bakış</span></button>
+        <div class="nav-heading">İLETİŞİM</div>
+        <button class="nav-item" data-route="support"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.8-5A8 8 0 1 1 21 12Z"/></svg></span><span class="nav-label">Canlı Destek</span><span id="badgeSupport" class="nav-badge">0</span></button>
+        <button class="nav-item" data-route="notifications"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 6-3 9h18c0-3-3-2-3-9Z"/><path d="M10 21h4"/></svg></span><span class="nav-label">Bildirimler</span><span id="badgeNotify" class="nav-badge">0</span></button>
+        <div class="nav-heading">MÜŞTERİ YÖNETİMİ</div>
+        <button class="nav-item" data-route="crm"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="8" r="4"/></svg></span><span class="nav-label">CRM</span></button>
+        <div class="nav-heading">SİPARİŞ YÖNETİMİ</div>
+        <button class="nav-item" data-route="orders"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M6 7h12l1 14H5L6 7Z"/><path d="M9 7a3 3 0 0 1 6 0"/></svg></span><span class="nav-label">Siparişler</span><span id="badgeOrders" class="nav-badge">0</span></button>
+        <button class="nav-item" data-route="products"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="m21 8-9-5-9 5 9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span><span class="nav-label">Ürünler</span></button>
+        <div class="nav-heading">ENTEGRASYON</div>
+        <button class="nav-item" data-route="integration"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1"/></svg></span><span class="nav-label">ikas Entegrasyonu</span></button>
+        <div class="nav-heading">DİĞER</div>
+        <button class="nav-item" data-route="reports"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></svg></span><span class="nav-label">Raporlar</span></button>
+        <button class="nav-item" data-route="settings"><span class="nav-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.1 2.1-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V20h-3v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1L6.6 16.7l.1-.1A1.7 1.7 0 0 0 7 14.7a1.7 1.7 0 0 0-1.5-1H5v-3h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 2.1-2.1.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V4h3v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 2.1 2.1-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1v3h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span><span class="nav-label">Ayarlar</span></button>
+      </nav>
+      <div class="side-foot"><button id="collapseBtn" class="btn ghost"><span>←</span><span>Menüyü Daralt</span></button><button id="logoutBtn" class="btn ghost"><span>Çıkış Yap</span></button></div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="top-left"><button id="mobileMenuBtn" class="icon-btn mobile-menu">☰</button><button id="deskMenuBtn" class="icon-btn">☰</button><div class="crumb-title" id="crumbTitle">Genel Bakış</div></div>
+        <div class="top-actions"><button class="top-icon" title="Ara">⌕</button><button id="pushBtn" class="top-icon" title="Bildirimleri aç">♧<span id="topBadge" class="top-dot">0</span></button><div class="profile"><div class="avatar">R</div><div class="profile-copy"><div class="profile-name">Ruth Istanbul</div><div class="profile-role">Yönetici</div></div></div></div>
+      </header>
+      <section class="content">
+        <div id="page-overview" class="page active">
+          <div class="layout-overview">
+            <div>
+              <div class="welcome"><div><h1>Hoş geldiniz, Ruth Istanbul 👋</h1><p>İşletmenizin tüm verilerine genel bakış.</p></div><div class="date-pill"><span id="todayText">Bugün</span><span>▣</span></div></div>
+              <div class="metrics">
+                <div class="metric"><div class="metric-row"><div class="metric-ico">☏</div><div><div class="metric-label">Açık Konuşmalar</div><div id="statOpen" class="metric-num">0</div></div></div><div class="metric-sub">+0 bugün</div></div>
+                <div class="metric"><div class="metric-row"><div class="metric-ico">✉</div><div><div class="metric-label">Okunmamış Mesajlar</div><div id="statUnread" class="metric-num">0</div></div></div><div class="metric-sub">+0 bugün</div></div>
+                <div class="metric"><div class="metric-row"><div class="metric-ico">▣</div><div><div class="metric-label">Bugünkü Hatırlatmalar</div><div id="statReminders" class="metric-num">0</div></div></div><div class="metric-sub">CRM görevleri</div></div>
+                <div class="metric"><div class="metric-row"><div class="metric-ico">♧</div><div><div class="metric-label">Toplam Sipariş</div><div id="statOrders" class="metric-num">0</div></div></div><div class="metric-sub">ikas bağlanınca canlı</div></div>
+              </div>
+              <div class="modules">
+                <button class="module" data-route="support"><div class="module-ico">☏</div><h3>CANLI DESTEK</h3><p>Müşterilerinizle anlık olarak iletişime geçin ve destek verin.</p><span class="btn gold">Konuşmaları Görüntüle →</span></button>
+                <button class="module" data-route="crm"><div class="module-ico">♙</div><h3>CRM</h3><p>Müşteri bilgileri, notlar ve hatırlatmaları yönetin.</p><span class="btn gold">CRM'ye Git →</span></button>
+                <button class="module" data-route="orders"><div class="module-ico">♧</div><h3>SİPARİŞLER</h3><p>Gelen siparişleri, ürünleri ve istatistikleri görüntüleyin.</p><span class="btn gold">Siparişleri Görüntüle →</span></button>
+              </div>
+              <div class="bottom-grid">
+                <div class="card"><div class="card-title">Son Konuşmalar</div><div id="recentConversations" class="list"><div class="empty">Yükleniyor...</div></div><button class="btn full" data-route="support">Tüm Konuşmaları Görüntüle</button></div>
+                <div class="card"><div class="card-title">Hatırlatmalar</div><div id="remindersList" class="list"><div class="empty">Yükleniyor...</div></div><button class="btn full" data-route="crm">Tüm Hatırlatmaları Görüntüle</button></div>
+                <div class="card"><div class="card-title">Sipariş Özeti (Bugün)</div><div class="info-line"><span>Toplam Sipariş</span><b id="ordersToday">0</b></div><div class="info-line"><span>Toplam Ürün Adedi</span><b id="unitsToday">0</b></div><div class="info-line"><span>Ürün Çeşidi</span><b id="kindsToday">0</b></div><button class="btn full" data-route="orders">Tüm Siparişleri Görüntüle</button></div>
+              </div>
+              <div class="footer-logo">RUTH ISTANBUL</div>
+            </div>
+            <aside class="right-rail">
+              <div class="card"><div class="card-title">Hızlı Erişim</div><div class="list"><button class="quick-row" data-route="crm"><span class="quick-left"><span>✎</span><span>Yeni Not Ekle</span></span><span>›</span></button><button class="quick-row" data-route="crm"><span class="quick-left"><span>▣</span><span>Hatırlatma Oluştur</span></span><span>›</span></button><button class="quick-row" data-route="crm"><span class="quick-left"><span>♙</span><span>Yeni Müşteri Ekle</span></span><span>›</span></button><button id="quickSync" class="quick-row"><span class="quick-left"><span>↻</span><span>Siparişleri Senkronize Et</span></span><span>›</span></button></div></div>
+              <div class="card"><div class="card-title">En Çok Satan Ürünler</div><div id="topProducts" class="list"><div class="empty">ikas API bağlanınca ürünler burada görünecek.</div></div><button class="btn full" data-route="orders">Tüm Ürünleri Görüntüle →</button></div>
+            </aside>
           </div>
-          <button id="closeBtn" class="btn">Kapat/Aç</button>
         </div>
-        <div id="messages" class="messages"><div class="empty">Soldan bir konuşma seç.</div></div>
-        <form id="replyForm" class="composer">
-          <textarea id="reply" placeholder="Cevap yaz..." disabled></textarea>
-          <button id="sendBtn" class="btn primary" disabled>Gönder</button>
-        </form>
-      </main>
-    </div>
-  </div>
+
+        <div id="page-support" class="page">
+          <div class="page-head"><div><div class="page-title">Canlı Destek</div><div class="page-sub">Siteden gelen konuşmaları buradan yanıtla.</div></div><button id="refreshSupport" class="btn">Yenile</button></div>
+          <div class="support-grid"><div class="panel"><div class="panel-head"><div class="panel-title">Konuşmalar</div><input id="searchInput" class="input" placeholder="Ara..." style="max-width:160px"></div><div id="conversationList" class="panel-body"><div class="empty">Yükleniyor...</div></div></div><div class="panel"><div class="panel-head"><div><div id="activeTitle" class="panel-title">Konuşma seç</div><div id="activeSub" class="preview">Müşteri mesajı burada açılır.</div></div><button id="closeConversation" class="btn ghost" disabled>Kapat</button></div><div id="messages" class="message-space"><div class="empty">Bir konuşma seç.</div></div><form id="replyForm" class="composer"><textarea id="replyText" class="textarea" placeholder="Yanıt yaz..." disabled></textarea><button id="sendReply" class="btn gold" disabled>Gönder</button></form></div><div class="panel"><div class="panel-head"><div class="panel-title">Müşteri Bilgisi</div></div><div class="panel-body"><div class="info-line"><span>Ad</span><b id="infoName">-</b></div><div class="info-line"><span>Telefon</span><b id="infoPhone">-</b></div><div class="info-line"><span>Son Mesaj</span><b id="infoLast">-</b></div><div class="info-line"><span>Sayfa</span><b id="infoPage">-</b></div><button class="btn gold full" data-route="crm">CRM Kaydına Git</button></div></div></div>
+        </div>
+
+        <div id="page-crm" class="page">
+          <div class="page-head"><div><div class="page-title">CRM</div><div class="page-sub">Müşteriye özel notlar, hatırlatmalar ve takip kayıtları.</div></div><button class="btn" id="refreshCrm">Yenile</button></div>
+          <div class="crm-grid"><div class="panel"><div class="panel-head"><div class="panel-title">Müşteriler</div><input id="crmSearch" class="input" placeholder="Müşteri ara..." style="max-width:180px"></div><div id="customers" class="panel-body"><div class="empty">Yükleniyor...</div></div></div><div class="panel"><div class="panel-head"><div><div id="crmTitle" class="panel-title">Müşteri seç</div><div id="crmSub" class="preview">Özel not eklemek için müşteri seç.</div></div></div><div class="panel-body"><div class="bottom-grid"><div class="card"><div class="info-line"><span>Telefon</span><b id="crmPhone">-</b></div><div class="info-line"><span>Durum</span><b id="crmStatus">-</b></div><div class="info-line"><span>Son Mesaj</span><b id="crmLast">-</b></div></div><form id="noteForm" class="card"><div class="card-title">Müşteriye Özel Not</div><textarea id="noteText" class="textarea" placeholder="Bu müşteri hakkında not yaz..." disabled></textarea><div class="field"><label>Hatırlatma zamanı</label><input id="noteReminder" class="input" type="datetime-local" disabled></div><button id="noteBtn" class="btn gold full" disabled>Notu Kaydet</button></form><div class="card"><div class="card-title">Kayıtlar</div><div id="notesList" class="list"><div class="empty">Müşteri seç.</div></div></div></div></div></div></div>
+        </div>
+
+        <div id="page-orders" class="page">
+          <div class="page-head"><div><div class="page-title">Siparişler</div><div class="page-sub">ikas API ile gelen sipariş ürün toplamları burada görünecek.</div></div><button id="syncOrders" class="btn gold">Siparişleri Senkronize Et</button></div>
+          <div class="metrics"><div class="metric"><div class="metric-label">Toplam Sipariş</div><div id="ordersTotal" class="metric-num">0</div></div><div class="metric"><div class="metric-label">Toplam Ürün Adedi</div><div id="unitsTotal" class="metric-num">0</div></div><div class="metric"><div class="metric-label">Ürün Çeşidi</div><div id="productKinds" class="metric-num">0</div></div><div class="metric"><div class="metric-label">ikas Durumu</div><div id="ikasStatus" class="metric-num" style="font-size:22px">Bekliyor</div></div></div>
+          <div class="orders-grid"><div class="panel"><div class="panel-head"><div class="panel-title">Hazırlanacak Ürün Toplamları</div></div><div id="productTotals" class="panel-body"><div class="empty">ikas API bağlanınca ürün isimleri, fotoğrafları ve adetleri burada görünecek.</div></div></div><div class="panel"><div class="panel-head"><div class="panel-title">Gelen Siparişler</div></div><div id="ordersList" class="panel-body"><div class="empty">Henüz canlı sipariş verisi bağlı değil.</div></div></div></div>
+        </div>
+
+        <div id="page-integration" class="page"><div class="page-head"><div><div class="page-title">ikas Entegrasyonu</div><div class="page-sub">Bir sonraki adımda ikas API bilgilerini buraya bağlayacağız.</div></div></div><div class="card"><div class="card-title">Bağlantı Planı</div><p class="page-sub">Siparişler, ürün görselleri, ürün adları ve toplam hazırlanacak adetler bu menüye aktarılacak.</p></div></div>
+        <div id="page-notifications" class="page"><div class="page-title">Bildirimler</div><p class="page-sub">Push bildirimleri ve hatırlatmalar burada yönetilecek.</p></div>
+        <div id="page-products" class="page"><div class="page-title">Ürünler</div><p class="page-sub">ikas ürün listesi bağlanınca burada görünecek.</p></div>
+        <div id="page-reports" class="page"><div class="page-title">Raporlar</div><p class="page-sub">Satış ve destek raporları burada hazırlanacak.</p></div>
+        <div id="page-settings" class="page"><div class="page-title">Ayarlar</div><p class="page-sub">Panel ayarları burada olacak.</p></div>
+      </section>
+    </main>
+  </section>
+  <div id="toast" class="toast"></div>
 
 <script>
 (function(){
-  var tokenKey = "ruth_admin_token";
-  var token = localStorage.getItem(tokenKey) || "";
-  var activeId = "";
-  var conversations = [];
-  var pollTimer = null;
-
-  var loginEl = document.getElementById("login");
-  var appEl = document.getElementById("app");
-  var usernameEl = document.getElementById("username");
-  var passwordEl = document.getElementById("password");
-  var loginBtn = document.getElementById("loginBtn");
-  var loginError = document.getElementById("loginError");
-  var conversationsEl = document.getElementById("conversations");
-  var messagesEl = document.getElementById("messages");
-  var activeTitle = document.getElementById("activeTitle");
-  var activeSub = document.getElementById("activeSub");
-  var replyForm = document.getElementById("replyForm");
-  var replyEl = document.getElementById("reply");
-  var sendBtn = document.getElementById("sendBtn");
-  var refreshBtn = document.getElementById("refreshBtn");
-  var logoutBtn = document.getElementById("logoutBtn");
-  var closeBtn = document.getElementById("closeBtn");
-  var pushBtn = document.getElementById("pushBtn");
-
-  loginBtn.addEventListener("click", login);
-  passwordEl.addEventListener("keydown", function(e){ if(e.key === "Enter") login(); });
-  refreshBtn.addEventListener("click", loadConversations);
-  logoutBtn.addEventListener("click", function(){ localStorage.removeItem(tokenKey); location.reload(); });
-  closeBtn.addEventListener("click", toggleStatus);
-  pushBtn.addEventListener("click", subscribePush);
-  replyForm.addEventListener("submit", sendReply);
-
-  boot();
-
-  function boot(){
-    if(!token) return showLogin();
-    api("/api/admin/me").then(function(me){
-      showApp();
-      pushBtn.style.display = me.pushReady ? "inline-block" : "none";
-      loadConversations();
-      pollTimer = setInterval(function(){
-        loadConversations(true);
-        if(activeId) loadMessages(activeId, true);
-      }, 4000);
-    }).catch(function(){
-      localStorage.removeItem(tokenKey);
-      showLogin();
-    });
-  }
-
-  function showLogin(){
-    loginEl.classList.remove("hidden");
-    appEl.classList.add("hidden");
-    setTimeout(function(){ passwordEl.focus(); }, 50);
-  }
-
-  function showApp(){
-    loginEl.classList.add("hidden");
-    appEl.classList.remove("hidden");
-  }
-
-  function login(){
-    loginError.textContent = "";
-    loginBtn.disabled = true;
-    fetch("/api/admin/login", {
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({username:usernameEl.value.trim(), password:passwordEl.value})
-    }).then(json).then(function(data){
-      if(!data.ok) throw new Error(data.error || "Giriş başarısız");
-      token = data.token;
-      localStorage.setItem(tokenKey, token);
-      showApp();
-      loadConversations();
-      pollTimer = setInterval(function(){
-        loadConversations(true);
-        if(activeId) loadMessages(activeId, true);
-      }, 4000);
-    }).catch(function(err){
-      loginError.textContent = "Giriş olmadı. Kullanıcı adı/şifreyi kontrol et.";
-    }).finally(function(){
-      loginBtn.disabled = false;
-    });
-  }
-
-  function loadConversations(silent){
-    if(!silent) conversationsEl.innerHTML = '<div class="empty">Konuşmalar yükleniyor...</div>';
-    return api("/api/admin/conversations").then(function(data){
-      conversations = data.conversations || [];
-      renderConversations();
-      var fromUrl = new URLSearchParams(location.search).get("conversation");
-      if(!activeId && fromUrl) selectConversation(fromUrl);
-      if(!activeId && conversations.length && !silent) selectConversation(conversations[0].id);
-    }).catch(function(err){
-      conversationsEl.innerHTML = '<div class="empty">Konuşmalar yüklenemedi: '+escapeHtml(err.message)+'</div>';
-    });
-  }
-
-  function renderConversations(){
-    if(!conversations.length){
-      conversationsEl.innerHTML = '<div class="empty">Henüz mesaj yok.</div>';
-      return;
-    }
-    conversationsEl.innerHTML = conversations.map(function(c){
-      return '<div class="conversation '+(c.id===activeId?'active':'')+'" data-id="'+escapeHtml(c.id)+'">'+
-        '<div class="row"><div class="name">'+escapeHtml(c.displayName || "Ziyaretçi")+'</div>'+
-        (c.unreadAdminCount ? '<div class="badge">'+c.unreadAdminCount+'</div>' : '<div class="time">'+formatDate(c.updatedAt)+'</div>')+
-        '</div><div class="preview">'+escapeHtml(c.lastMessageText || c.pageTitle || "Yeni konuşma")+'</div></div>';
-    }).join("");
-    Array.prototype.forEach.call(conversationsEl.querySelectorAll(".conversation"), function(el){
-      el.addEventListener("click", function(){ selectConversation(el.getAttribute("data-id")); });
-    });
-  }
-
-  function selectConversation(id){
-    activeId = id;
-    renderConversations();
-    loadMessages(id);
-  }
-
-  function loadMessages(id, silent){
-    var c = conversations.find(function(x){ return x.id === id; });
-    if(c){
-      activeTitle.textContent = c.displayName || "Ziyaretçi";
-      activeSub.textContent = (c.pageTitle || "") + (c.pageUrl ? " • " + c.pageUrl : "");
-    }
-    if(!silent) messagesEl.innerHTML = '<div class="empty">Mesajlar yükleniyor...</div>';
-    replyEl.disabled = false;
-    sendBtn.disabled = false;
-
-    return api("/api/admin/conversations/"+encodeURIComponent(id)+"/messages").then(function(data){
-      renderMessages(data.messages || []);
-      return api("/api/admin/conversations/"+encodeURIComponent(id)+"/read", {method:"POST"}).then(function(){});
-    }).catch(function(err){
-      messagesEl.innerHTML = '<div class="empty">Mesajlar yüklenemedi: '+escapeHtml(err.message)+'</div>';
-    });
-  }
-
-  function renderMessages(items){
-    if(!items.length){
-      messagesEl.innerHTML = '<div class="empty">Bu konuşmada mesaj yok.</div>';
-      return;
-    }
-    messagesEl.innerHTML = items.map(function(m){
-      return '<div class="msg '+escapeHtml(m.sender)+'">'+
-        '<div>'+escapeHtml(m.body || (m.imageData ? "Fotoğraf" : ""))+'</div>'+
-        (m.imageData ? '<img src="'+m.imageData+'" alt="Müşteri fotoğrafı">' : '')+
-        '<div class="meta">'+escapeHtml(m.sender)+' • '+formatDate(m.createdAt)+'</div>'+
-      '</div>';
-    }).join("");
-    messagesEl.scrollTop = messagesEl.scrollHeight;
-  }
-
-  function sendReply(e){
-    e.preventDefault();
-    var text = replyEl.value.trim();
-    if(!activeId || !text) return;
-    sendBtn.disabled = true;
-    api("/api/admin/conversations/"+encodeURIComponent(activeId)+"/reply", {
-      method:"POST",
-      body:JSON.stringify({message:text})
-    }).then(function(){
-      replyEl.value = "";
-      loadMessages(activeId);
-      loadConversations(true);
-    }).catch(function(err){
-      alert("Mesaj gönderilemedi: " + err.message);
-    }).finally(function(){
-      sendBtn.disabled = false;
-    });
-  }
-
-  function toggleStatus(){
-    if(!activeId) return;
-    var c = conversations.find(function(x){ return x.id === activeId; });
-    var next = c && c.status === "closed" ? "open" : "closed";
-    api("/api/admin/conversations/"+encodeURIComponent(activeId)+"/status", {
-      method:"POST",
-      body:JSON.stringify({status:next})
-    }).then(function(){ loadConversations(true); });
-  }
-
-  function subscribePush(){
-    if(!("serviceWorker" in navigator) || !("PushManager" in window)){
-      alert("Bu tarayıcı bildirim desteklemiyor.");
-      return;
-    }
-    api("/api/admin/me").then(function(me){
-      if(!me.vapidPublicKey) throw new Error("VAPID key yok");
-      return navigator.serviceWorker.register("/sw.js").then(function(reg){
-        return reg.pushManager.subscribe({
-          userVisibleOnly:true,
-          applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)
-        });
-      });
-    }).then(function(sub){
-      return api("/api/admin/push/subscribe", {method:"POST", body:JSON.stringify({subscription:sub})});
-    }).then(function(){
-      alert("Bildirim açıldı.");
-    }).catch(function(err){
-      alert("Bildirim açılamadı: " + err.message);
-    });
-  }
-
-  function api(url, options){
-    options = options || {};
-    options.headers = Object.assign({"Content-Type":"application/json"}, options.headers || {});
-    if(token) options.headers.Authorization = "Bearer " + token;
-    return fetch(url, options).then(json).then(function(data){
-      if(!data.ok) throw new Error(data.error || "İstek başarısız");
-      return data;
-    });
-  }
-
-  function json(response){
-    return response.json().catch(function(){ return {}; }).then(function(data){
-      if(!response.ok && !data.error) data.error = "HTTP " + response.status;
-      return data;
-    });
-  }
-
-  function escapeHtml(value){
-    return String(value || "")
-      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
-      .replace(/"/g,"&quot;").replace(/'/g,"&#039;");
-  }
-
-  function formatDate(value){
-    if(!value) return "";
-    var d = new Date(value);
-    if(isNaN(d.getTime())) return "";
-    return d.toLocaleString("tr-TR", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"});
-  }
-
-  function urlBase64ToUint8Array(base64String){
-    var padding = "=".repeat((4 - base64String.length % 4) % 4);
-    var base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
-    var rawData = atob(base64);
-    var outputArray = new Uint8Array(rawData.length);
-    for(var i=0;i<rawData.length;++i) outputArray[i] = rawData.charCodeAt(i);
-    return outputArray;
-  }
+  var token=localStorage.getItem('ruth_admin_token')||'';
+  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0},productTotals:[],orders:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null;
+  function $(id){return document.getElementById(id)}
+  function qsa(sel){return Array.prototype.slice.call(document.querySelectorAll(sel))}
+  function setText(id,val){var el=$(id); if(el) el.textContent=(val===undefined||val===null)?'':String(val)}
+  function escapeHtml(v){return String(v||'').replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]})}
+  function fmtDate(v){if(!v)return '-'; try{return new Date(v).toLocaleString('tr-TR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}catch(e){return v}}
+  function today(){try{return new Date().toLocaleDateString('tr-TR',{day:'2-digit',month:'long',year:'numeric'})}catch(e){return 'Bugün'}}
+  function api(path,opts){opts=opts||{}; opts.headers=opts.headers||{}; opts.headers['Content-Type']='application/json'; if(token) opts.headers.Authorization='Bearer '+token; return fetch(path,opts).then(function(r){return r.text().then(function(t){var d=t?JSON.parse(t):{}; if(!r.ok){if(r.status===401) logout(false); throw new Error(d.error||d.message||'İstek başarısız')} return d})})}
+  function toast(msg){var el=$('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(function(){el.classList.remove('show')},2200)}
+  function showApp(){ $('loginPage').classList.add('hidden'); $('app').classList.remove('hidden'); setText('todayText',today()); setRoute(routeFromPath(),false); loadAll(); }
+  function logout(push){token=''; localStorage.removeItem('ruth_admin_token'); $('app').classList.add('hidden'); $('loginPage').classList.remove('hidden'); if(push!==false) history.replaceState(null,'','/admin/'); }
+  $('loginForm').addEventListener('submit',function(e){e.preventDefault(); setText('loginError',''); api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token; localStorage.setItem('ruth_admin_token',token); showApp();}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message)})});
+  $('logoutBtn').addEventListener('click',function(){logout()});
+  $('collapseBtn').addEventListener('click',function(){ $('app').classList.toggle('nav-mini') });
+  $('deskMenuBtn').addEventListener('click',function(){ $('app').classList.toggle('nav-mini') });
+  $('mobileMenuBtn').addEventListener('click',function(){ $('app').classList.add('mobile-open') });
+  $('drawerShade').addEventListener('click',function(){ $('app').classList.remove('mobile-open') });
+  qsa('[data-route]').forEach(function(el){el.addEventListener('click',function(){setRoute(el.getAttribute('data-route'),true); $('app').classList.remove('mobile-open')})});
+  window.addEventListener('popstate',function(){setRoute(routeFromPath(),false)});
+  function routeFromPath(){var p=location.pathname.replace(/^\/admin\/?/,'').replace(/\/$/,''); return p||'overview'}
+  function setRoute(route,push){var allowed=['overview','support','crm','orders','integration','notifications','products','reports','settings']; if(allowed.indexOf(route)<0) route='overview'; activeRoute=route; qsa('.page').forEach(function(p){p.classList.remove('active')}); var page=$('page-'+route); if(page) page.classList.add('active'); qsa('.nav-item').forEach(function(n){n.classList.toggle('active',n.getAttribute('data-route')===route)}); var titles={overview:'Genel Bakış',support:'Canlı Destek',crm:'CRM',orders:'Siparişler',integration:'ikas Entegrasyonu',notifications:'Bildirimler',products:'Ürünler',reports:'Raporlar',settings:'Ayarlar'}; setText('crumbTitle',titles[route]||'Panel'); if(push) history.pushState(null,'','/admin/'+(route==='overview'?'':route)); if(route==='support'){loadConversations(true)} if(route==='crm'){loadConversations(true)} if(route==='orders'){loadIkasSummary()} }
+  function loadAll(){ loadConversations(true); loadReminders(); loadIkasSummary(); setInterval(function(){if(token)loadConversations(true)},6000); }
+  function loadConversations(silent){ return api('/api/admin/conversations').then(function(d){conversations=d.conversations||[]; renderAll(); if(activeId){ if(activeRoute==='support')loadMessages(activeId,true); if(activeRoute==='crm')loadCrmDetail(activeId,true); }}).catch(function(err){if(!silent)toast(err.message)})}
+  function loadReminders(){return api('/api/admin/reminders/due').then(function(d){reminders=d.reminders||[]; renderReminders()}).catch(function(){})}
+  function loadIkasSummary(){return api('/api/admin/ikas/summary').then(function(d){ikasSummary=d||ikasSummary; renderIkas();}).catch(function(){renderIkas()})}
+  function renderAll(){ var open=conversations.filter(function(c){return c.status!=='closed'}).length; var unread=conversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0); setText('statOpen',open); setText('statUnread',unread); setText('badgeSupport',unread); setText('topBadge',unread); renderRecent(); renderConversations(); renderCustomers(); }
+  function renderRecent(){ var el=$('recentConversations'); if(!el)return; var items=conversations.slice(0,4); if(!items.length){el.innerHTML='<div class="empty">Henüz konuşma yok.</div>';return;} el.innerHTML=items.map(function(c){return '<div class="mini-row"><div class="row"><div class="name">'+escapeHtml(c.displayName||'Ziyaretçi')+'</div><span class="time">'+fmtDate(c.updatedAt)+'</span></div><div class="preview">'+escapeHtml(c.lastMessageText||'Yeni konuşma')+'</div></div>'}).join('') }
+  function renderReminders(){setText('statReminders',reminders.length); setText('badgeNotify',reminders.length); var el=$('remindersList'); if(!el)return; if(!reminders.length){el.innerHTML='<div class="empty">Bekleyen hatırlatma yok.</div>';return;} el.innerHTML=reminders.slice(0,4).map(function(n){return '<div class="mini-row"><div class="row"><div class="name">'+escapeHtml(n.body||'Hatırlatma')+'</div><span class="time">□</span></div><div class="preview">'+fmtDate(n.reminderAt)+'</div></div>'}).join('')}
+  function filteredConversations(){ var term=(($('searchInput')&&$('searchInput').value)||($('crmSearch')&&$('crmSearch').value)||'').toLowerCase(); if(!term)return conversations; return conversations.filter(function(c){return [c.displayName,c.visitorPhone,c.lastMessageText,c.pageTitle].join(' ').toLowerCase().indexOf(term)>=0}) }
+  function renderConversations(){ var el=$('conversationList'); if(!el)return; var items=filteredConversations(); if(!items.length){el.innerHTML='<div class="empty">Konuşma yok.</div>';return;} el.innerHTML=items.map(function(c){return '<div class="conversation '+(c.id===activeId?'active':'')+'" data-id="'+escapeHtml(c.id)+'"><div class="row"><div class="name">'+escapeHtml(c.displayName||'Ziyaretçi')+'</div>'+(c.unreadAdminCount?'<span class="badge">'+c.unreadAdminCount+'</span>':'<span class="time">'+fmtDate(c.updatedAt)+'</span>')+'</div><div class="preview">'+escapeHtml(c.lastMessageText||c.pageTitle||'Yeni konuşma')+'</div></div>'}).join(''); qsa('#conversationList .conversation').forEach(function(x){x.addEventListener('click',function(){selectConversation(x.getAttribute('data-id'),'support')})}) }
+  function renderCustomers(){ var el=$('customers'); if(!el)return; var items=filteredConversations(); if(!items.length){el.innerHTML='<div class="empty">Henüz müşteri yok.</div>';return;} el.innerHTML=items.map(function(c){return '<div class="customer-row '+(c.id===activeId?'active':'')+'" data-id="'+escapeHtml(c.id)+'"><div class="row"><div class="name">'+escapeHtml(c.displayName||'Ziyaretçi')+'</div><span class="time">'+escapeHtml(c.status||'open')+'</span></div><div class="preview">'+escapeHtml(c.visitorPhone||c.lastMessageText||'Müşteri kaydı')+'</div></div>'}).join(''); qsa('#customers .customer-row').forEach(function(x){x.addEventListener('click',function(){selectConversation(x.getAttribute('data-id'),'crm')})}) }
+  function getActive(){return conversations.find(function(c){return c.id===activeId})||{}}
+  function selectConversation(id,route){ if(activeId&&activeId!==id)sendTyping(false,activeId); activeId=id; renderConversations(); renderCustomers(); if(route)setRoute(route,true); if(route==='support')loadMessages(id); if(route==='crm')loadCrmDetail(id); }
+  function fillInfo(c){setText('infoName',c.displayName||'-');setText('infoPhone',c.visitorPhone||'-');setText('infoLast',c.lastMessageText||'-');setText('infoPage',c.pageTitle||c.pageUrl||'-')}
+  function loadMessages(id,silent){ var c=getActive(); setText('activeTitle',c.displayName||'Ziyaretçi'); setText('activeSub',(c.pageTitle||'')+(c.pageUrl?' • '+c.pageUrl:'')); fillInfo(c); $('replyText').disabled=false; $('sendReply').disabled=false; $('closeConversation').disabled=false; if(!silent)$('messages').innerHTML='<div class="empty">Mesajlar yükleniyor...</div>'; return api('/api/admin/conversations/'+encodeURIComponent(id)+'/messages').then(function(d){renderMessages(d.messages||[]); return api('/api/admin/conversations/'+encodeURIComponent(id)+'/read',{method:'POST'}).catch(function(){})}).catch(function(err){$('messages').innerHTML='<div class="empty">Mesajlar yüklenemedi: '+escapeHtml(err.message)+'</div>'}) }
+  function renderMessages(items){var el=$('messages'); if(!items.length){el.innerHTML='<div class="empty">Bu konuşmada mesaj yok.</div>';return;} el.innerHTML=items.map(function(m){return '<div class="msg '+escapeHtml(m.sender)+'"><div>'+escapeHtml(m.body||(m.imageData?'Fotoğraf':''))+'</div>'+(m.imageData?'<img src="'+m.imageData+'" alt="Müşteri fotoğrafı">':'')+'<div class="meta">'+escapeHtml(m.sender)+' • '+fmtDate(m.createdAt)+'</div></div>'}).join(''); el.scrollTop=el.scrollHeight;}
+  $('replyForm').addEventListener('submit',function(e){e.preventDefault(); var text=$('replyText').value.trim(); if(!activeId||!text)return; $('sendReply').disabled=true; sendTyping(false); api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/reply',{method:'POST',body:JSON.stringify({message:text})}).then(function(){ $('replyText').value=''; loadMessages(activeId); loadConversations(true); toast('Mesaj gönderildi')}).catch(function(err){alert('Mesaj gönderilemedi: '+err.message)}).finally(function(){$('sendReply').disabled=false})});
+  $('replyText').addEventListener('input',function(){ if(!activeId)return; clearTimeout(typingTimer); clearTimeout(typingStop); typingTimer=setTimeout(function(){sendTyping(true)},100); typingStop=setTimeout(function(){sendTyping(false)},2500); });
+  function sendTyping(isTyping,forced){var id=forced||activeId; if(!id||!token)return; if(isTyping&&typingFor===id)return; if(!isTyping&&!typingFor&&!forced)return; if(isTyping)typingFor=id; if(!isTyping&&(!forced||typingFor===id))typingFor=''; api('/api/admin/conversations/'+encodeURIComponent(id)+'/typing',{method:'POST',body:JSON.stringify({typing:!!isTyping})}).catch(function(){})}
+  $('closeConversation').addEventListener('click',function(){if(!activeId)return; var c=getActive(); api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/status',{method:'POST',body:JSON.stringify({status:c.status==='closed'?'open':'closed'})}).then(function(){loadConversations(true);toast('Durum güncellendi')})});
+  function loadCrmDetail(id,silent){var c=getActive(); setText('crmTitle',c.displayName||'Ziyaretçi'); setText('crmSub',c.pageTitle||c.pageUrl||'Müşteri kaydı'); setText('crmPhone',c.visitorPhone||'-'); setText('crmStatus',c.status||'open'); setText('crmLast',c.lastMessageText||'-'); $('noteText').disabled=false; $('noteReminder').disabled=false; $('noteBtn').disabled=false; if(!silent)$('notesList').innerHTML='<div class="empty">Notlar yükleniyor...</div>'; return api('/api/admin/conversations/'+encodeURIComponent(id)+'/messages').then(function(d){renderNotes(d.notes||[])}).catch(function(err){$('notesList').innerHTML='<div class="empty">CRM yüklenemedi: '+escapeHtml(err.message)+'</div>'})}
+  function renderNotes(notes){var el=$('notesList'); if(!notes.length){el.innerHTML='<div class="empty">Bu müşteri için henüz özel not yok.</div>';return;} el.innerHTML=notes.map(function(n){return '<div class="note '+(n.completedAt?'done':'')+'"><div class="row"><div class="note-body">'+escapeHtml(n.body)+'</div><button class="btn ghost note-done" data-id="'+escapeHtml(n.id)+'" data-done="'+(n.completedAt?'1':'0')+'">'+(n.completedAt?'Geri Al':'Tamamla')+'</button></div><div class="note-meta">Hatırlatma: '+escapeHtml(n.reminderAt?fmtDate(n.reminderAt):'Yok')+' • Oluşturuldu: '+fmtDate(n.createdAt)+'</div></div>'}).join(''); qsa('.note-done').forEach(function(b){b.addEventListener('click',function(){api('/api/admin/notes/'+encodeURIComponent(b.getAttribute('data-id')),{method:'PATCH',body:JSON.stringify({completed:b.getAttribute('data-done')!=='1'})}).then(function(){loadCrmDetail(activeId);loadReminders()})})})}
+  $('noteForm').addEventListener('submit',function(e){e.preventDefault(); if(!activeId)return; var text=$('noteText').value.trim(); if(!text)return; $('noteBtn').disabled=true; api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/notes',{method:'POST',body:JSON.stringify({note:text,reminderAt:$('noteReminder').value||''})}).then(function(){$('noteText').value='';$('noteReminder').value='';loadCrmDetail(activeId);loadReminders();toast('Müşteri notu eklendi')}).catch(function(err){alert('Not eklenemedi: '+err.message)}).finally(function(){$('noteBtn').disabled=false})});
+  function renderIkas(){var totals=ikasSummary.totals||{}; var products=ikasSummary.productTotals||[]; var orders=ikasSummary.orders||[]; setText('statOrders',totals.orders||0); setText('badgeOrders',totals.orders||0); setText('ordersToday',totals.orders||0); setText('unitsToday',totals.units||0); setText('kindsToday',products.length||0); setText('ordersTotal',totals.orders||0); setText('unitsTotal',totals.units||0); setText('productKinds',products.length||0); setText('ikasStatus',ikasSummary.connected?'Bağlı':'Bekliyor'); var top=$('topProducts'); if(top){ if(products.length){top.innerHTML=products.slice(0,5).map(function(p,i){return '<div class="rail-product"><div class="prod-img">'+(p.image?'<img src="'+escapeHtml(p.image)+'" alt="">':'◇')+'</div><div><div class="name">'+(i+1)+'. '+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+Number(p.quantity||0)+' adet</div></div></div>'}).join('')}else top.innerHTML='<div class="empty">ikas API bağlanınca ürünler burada görünecek.</div>'} var el=$('productTotals'); if(el){ if(products.length){el.innerHTML=products.map(function(p){return '<div class="product-row"><div class="prod-img">'+(p.image?'<img src="'+escapeHtml(p.image)+'" alt="">':'◇')+'</div><div><div class="name">'+escapeHtml(p.name||'Ürün')+'</div><div class="preview">SKU: '+escapeHtml(p.sku||'-')+'</div></div><div class="qty">'+Number(p.quantity||0)+'</div></div>'}).join('')}else el.innerHTML='<div class="empty">ikas API bağlanınca ürün isimleri, fotoğrafları ve toplam adetler burada görünecek.</div>'} var list=$('ordersList'); if(list){ if(orders.length){list.innerHTML=orders.map(function(o){return '<div class="order-row"><div class="prod-img">▣</div><div><div class="name">'+escapeHtml(o.number||'Sipariş')+'</div><div class="preview">'+escapeHtml(o.customer||'')+'</div></div><div class="badge">'+escapeHtml(o.status||'Yeni')+'</div></div>'}).join('')}else list.innerHTML='<div class="empty">Henüz canlı sipariş verisi bağlı değil.</div>'}}
+  $('syncOrders').addEventListener('click',function(){loadIkasSummary().then(function(){toast('Sipariş verisi yenilendi')})}); $('quickSync').addEventListener('click',function(){setRoute('orders',true);loadIkasSummary().then(function(){toast('Sipariş verisi yenilendi')})});
+  $('refreshSupport').addEventListener('click',function(){loadConversations(false)}); $('refreshCrm').addEventListener('click',function(){loadConversations(false)}); $('searchInput').addEventListener('input',renderConversations); $('crmSearch').addEventListener('input',renderCustomers);
+  $('pushBtn').addEventListener('click',subscribePush);
+  function subscribePush(){ if(!('serviceWorker' in navigator)||!('PushManager' in window)){alert('Bu tarayıcı bildirim desteklemiyor.');return;} api('/api/admin/me').then(function(me){if(!me.vapidPublicKey)throw new Error('VAPID key yok'); return navigator.serviceWorker.register('/sw.js').then(function(reg){return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)})})}).then(function(sub){return api('/api/admin/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub})})}).then(function(){toast('Bildirimler açıldı')}).catch(function(err){alert('Bildirim açılamadı: '+err.message)})}
+  function urlBase64ToUint8Array(base64String){var padding='='.repeat((4-base64String.length%4)%4); var base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/'); var raw=atob(base64); var arr=new Uint8Array(raw.length); for(var i=0;i<raw.length;++i)arr[i]=raw.charCodeAt(i); return arr}
+  if(token){showApp()} else {$('loginPage').classList.remove('hidden')}
 })();
 </script>
 </body>
 </html>`;
-}
-
-function sendFile(res, filePath) {
-  const normalized = path.normalize(filePath);
-  if (!normalized.startsWith(PUBLIC_DIR) || !fs.existsSync(normalized) || fs.statSync(normalized).isDirectory()) {
-    sendJson(res, { ok: false, error: "not_found" }, 404);
-    return true;
-  }
-  const ext = path.extname(normalized).toLowerCase();
-  const type = {
-    ".html": "text/html; charset=utf-8",
-    ".css": "text/css; charset=utf-8",
-    ".js": "text/javascript; charset=utf-8",
-    ".json": "application/json; charset=utf-8",
-    ".webmanifest": "application/manifest+json; charset=utf-8",
-    ".svg": "image/svg+xml; charset=utf-8"
-  }[ext] || "application/octet-stream";
-  res.writeHead(200, { "Content-Type": type, "Cache-Control": ext === ".js" ? "no-cache" : "public, max-age=300" });
-  fs.createReadStream(normalized).pipe(res);
-  return true;
-}
-
-function requireAdmin(req, res) {
-  const header = String(req.headers.authorization || "");
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  const payload = verifyToken(token);
-  if (!payload || payload.sub !== ADMIN_USER) {
-    sendJson(res, { ok: false, error: "unauthorized" }, 401);
-    return null;
-  }
-  return payload;
-}
-
-function signToken(payload) {
-  const body = base64url(JSON.stringify(payload));
-  const signature = crypto.createHmac("sha256", SESSION_SECRET).update(body).digest("base64url");
-  return `${body}.${signature}`;
-}
-
-function verifyToken(token) {
-  const [body, signature] = String(token || "").split(".");
-  if (!body || !signature) return null;
-  const expected = crypto.createHmac("sha256", SESSION_SECRET).update(body).digest("base64url");
-  if (!safeEqual(signature, expected)) return null;
-  try {
-    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
-    if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
-    return payload;
-  } catch (error) {
-    return null;
-  }
-}
-
-function safeEqual(a, b) {
-  const left = Buffer.from(String(a));
-  const right = Buffer.from(String(b));
-  return left.length === right.length && crypto.timingSafeEqual(left, right);
-}
-
-function readJson(req, limit = 1_000_000) {
-  return new Promise((resolve, reject) => {
-    let raw = "";
-    req.on("data", (chunk) => {
-      raw += chunk;
-      if (raw.length > limit) {
-        reject(new Error("body_too_large"));
-        req.destroy();
-      }
-    });
-    req.on("end", () => {
-      try {
-        resolve(raw ? JSON.parse(raw) : {});
-      } catch (error) {
-        reject(error);
-      }
-    });
-    req.on("error", reject);
-  });
-}
-
-function sendJson(res, payload, status = 200) {
-  if (res.headersSent || res.writableEnded) return true;
-  res.writeHead(status, {
-    "Content-Type": "application/json; charset=utf-8",
-    "Cache-Control": "no-store"
-  });
-  res.end(JSON.stringify(payload));
-  return true;
-}
-
-function setCors(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
-}
-
-function redirect(res, location) {
-  res.writeHead(302, { Location: location });
-  res.end();
-}
-
-function normalizeDb(db) {
-  return {
-    counters: { visitor: Number(db.counters && db.counters.visitor || 0) },
-    conversations: Array.isArray(db.conversations) ? db.conversations : [],
-    messages: Array.isArray(db.messages) ? db.messages : [],
-    pushSubscriptions: Array.isArray(db.pushSubscriptions) ? db.pushSubscriptions : [],
-    customerNotes: Array.isArray(db.customerNotes) ? db.customerNotes : []
-  };
-}
-
-function publicMessage(message) {
-  return {
-    id: message.id,
-    sender: message.sender,
-    body: message.body || "",
-    createdAt: message.createdAt
-  };
-}
-
-function adminMessage(message) {
-  return {
-    id: message.id,
-    conversationId: message.conversationId,
-    sender: message.sender,
-    body: message.body || "",
-    imageName: message.imageName || "",
-    imageMime: message.imageMime || "",
-    imageData: message.imageData || "",
-    createdAt: message.createdAt
-  };
-}
-
-function adminConversation(conversation) {
-  return {
-    id: conversation.id,
-    sessionId: conversation.sessionId,
-    visitorName: conversation.visitorName || "",
-    visitorLabel: conversation.visitorLabel || "Ziyaretçi",
-    visitorPhone: conversation.visitorPhone || "",
-    displayName: displayName(conversation),
-    pageUrl: conversation.pageUrl || "",
-    pageTitle: conversation.pageTitle || "",
-    status: conversation.status || "open",
-    unreadAdminCount: Number(conversation.unreadAdminCount || 0),
-    lastMessageText: conversation.lastMessageText || "",
-    lastCustomerMessageAt: conversation.lastCustomerMessageAt || "",
-    lastAdminMessageAt: conversation.lastAdminMessageAt || "",
-    createdAt: conversation.createdAt || "",
-    updatedAt: conversation.updatedAt || ""
-  };
-}
-
-function adminNote(note) {
-  return {
-    id: note.id,
-    conversationId: note.conversationId,
-    body: note.body || "",
-    reminderAt: note.reminderAt || "",
-    reminderSentAt: note.reminderSentAt || "",
-    completedAt: note.completedAt || "",
-    createdAt: note.createdAt || "",
-    updatedAt: note.updatedAt || ""
-  };
-}
-
-function adminReminder(note) {
-  return adminNote(note);
-}
-
-function displayName(conversation) {
-  return conversation.visitorName || conversation.visitorPhone || conversation.visitorLabel || "Ziyaretçi";
-}
-
-function guessVisitorName(text) {
-  const value = String(text || "").trim();
-  if (value.length < 2 || value.length > 60) return "";
-  if (/[?!.:,;@#0-9]/.test(value)) return "";
-  const normalized = normalizeText(value);
-  if (/(merhaba|selam|siparis|sipariş|urun|ürün|beden|stok|kargo|iade|degisim|değişim|fiyat|whatsapp|yardim|yardım)/.test(normalized)) return "";
-  if (!/^[a-zA-ZğüşöçıİĞÜŞÖÇ\s'-]+$/.test(value)) return "";
-  return value;
-}
-
-function guessPhone(text) {
-  const match = String(text || "").match(/(?:\+?90|0)?\s?5\d{2}[\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}/);
-  return match ? match[0].replace(/[^\d+]/g, "") : "";
-}
-
-function normalizeText(value) {
-  return String(value || "")
-    .toLocaleLowerCase("tr")
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "");
-}
-
-function sanitizeImage(image) {
-  if (!image || typeof image !== "object") return null;
-  const data = String(image.data || "");
-  if (!/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(data)) return null;
-  const bytes = Buffer.byteLength(data, "utf8");
-  if (bytes > MAX_IMAGE_BYTES) {
-    throw new Error("image_too_large");
-  }
-  return {
-    name: String(image.name || "fotoğraf").slice(0, 160),
-    mime: String(image.mime || "image/jpeg").slice(0, 80),
-    data
-  };
-}
-
-function normalizeReminderAt(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toISOString();
-}
-
-function cleanSessionId(value) {
-  return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 120);
-}
-
-function createId(prefix) {
-  return `${prefix}_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
-}
-
-function base64url(value) {
-  return Buffer.from(String(value)).toString("base64url");
-}
-
-function trimSlash(value) {
-  return String(value || "").replace(/\/+$/, "");
 }
 
 function normalizeSupabaseUrl(value) {
