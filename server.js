@@ -19,7 +19,7 @@ const SESSION_SECRET = process.env.RUTH_SESSION_SECRET || "change-this-secret-be
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "";
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:info@ruthistanbul.com";
-const SUPABASE_URL = trimSlash(process.env.SUPABASE_URL || "");
+const SUPABASE_URL = normalizeSupabaseUrl(process.env.SUPABASE_URL || "");
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 const MAX_IMAGE_BYTES = Number(process.env.RUTH_MAX_IMAGE_BYTES || 2_500_000);
 const ADMIN_NOTIFICATION_TITLE = "RUTH ISTANBUL";
@@ -643,23 +643,412 @@ function serveStatic(req, res, url) {
   if (req.method !== "GET") return false;
 
   if (url.pathname === "/admin" || url.pathname === "/admin/") {
-    return sendFile(res, path.join(PUBLIC_DIR, "admin", "index.html"));
+    const adminFile = path.join(PUBLIC_DIR, "admin", "index.html");
+    if (fs.existsSync(adminFile)) return sendFile(res, adminFile);
+    return sendHtml(res, adminHtml());
   }
 
   if (url.pathname.startsWith("/admin/")) {
     const relative = url.pathname.replace(/^\/admin\/+/, "");
-    return sendFile(res, path.join(PUBLIC_DIR, "admin", relative));
+    const filePath = path.join(PUBLIC_DIR, "admin", relative);
+    if (fs.existsSync(filePath)) return sendFile(res, filePath);
+    return sendHtml(res, adminHtml());
   }
 
   if (url.pathname === "/manifest.webmanifest") {
-    return sendFile(res, path.join(PUBLIC_DIR, "admin", "manifest.webmanifest"));
+    const manifestFile = path.join(PUBLIC_DIR, "admin", "manifest.webmanifest");
+    if (fs.existsSync(manifestFile)) return sendFile(res, manifestFile);
+    return sendJson(res, {
+      name: "RUTH ISTANBUL Panel",
+      short_name: "RUTH Panel",
+      start_url: "/admin/",
+      scope: "/",
+      display: "standalone",
+      background_color: "#050505",
+      theme_color: "#050505",
+      icons: []
+    });
   }
 
   if (url.pathname === "/sw.js") {
-    return sendFile(res, path.join(PUBLIC_DIR, "admin", "sw.js"));
+    const swFile = path.join(PUBLIC_DIR, "admin", "sw.js");
+    if (fs.existsSync(swFile)) return sendFile(res, swFile);
+    return sendText(res, "self.addEventListener('push',function(event){var data={};try{data=event.data?event.data.json():{};}catch(e){};event.waitUntil(self.registration.showNotification(data.title||'RUTH ISTANBUL',{body:data.body||'Yeni mesaj var.',tag:data.tag||'ruth',data:data.data||{},icon:data.icon||''}));});self.addEventListener('notificationclick',function(event){event.notification.close();event.waitUntil(clients.openWindow('/admin/'));});", "text/javascript; charset=utf-8");
   }
 
   return false;
+}
+
+function sendHtml(res, html, status = 200) {
+  res.writeHead(status, {
+    "Content-Type": "text/html; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  res.end(html);
+  return true;
+}
+
+function sendText(res, value, type = "text/plain; charset=utf-8", status = 200) {
+  res.writeHead(status, {
+    "Content-Type": type,
+    "Cache-Control": "no-store"
+  });
+  res.end(String(value || ""));
+  return true;
+}
+
+function adminHtml() {
+  return `<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#050505">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <title>RUTH ISTANBUL Panel</title>
+  <style>
+    :root{--gold:#d8b83f;--gold2:#efe2a2;--ink:#050505;--muted:#666;--line:rgba(5,5,5,.12);--bg:#faf8f0;--white:#fff}
+    *{box-sizing:border-box}
+    body{margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink)}
+    button,input,textarea{font:inherit}
+    .top{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 18px;background:var(--ink);color:white}
+    .brand{display:flex;align-items:center;gap:10px;font-weight:900;letter-spacing:.04em}
+    .mark{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;background:var(--gold);color:var(--ink);font-family:Georgia,serif;font-weight:900}
+    .wrap{display:grid;grid-template-columns:340px 1fr;min-height:calc(100dvh - 62px)}
+    .sidebar{border-right:1px solid var(--line);background:white;overflow:auto}
+    .main{display:grid;grid-template-rows:auto 1fr auto;min-width:0}
+    .toolbar{display:flex;gap:8px;align-items:center;justify-content:space-between;padding:12px;border-bottom:1px solid var(--line);background:white}
+    .btn{border:1px solid var(--line);border-radius:10px;padding:9px 12px;background:white;cursor:pointer;font-weight:800}
+    .btn.primary{background:var(--gold);border-color:var(--gold);color:var(--ink)}
+    .btn.danger{background:#1f1f1f;color:#fff}
+    .btn:disabled{opacity:.55;cursor:not-allowed}
+    .login{max-width:420px;margin:80px auto;padding:24px;background:white;border:1px solid var(--line);border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.12)}
+    .login h1{margin:0 0 16px;font-size:24px}
+    label{display:block;margin:12px 0 6px;font-weight:800}
+    input,textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:11px 12px;background:white;outline:none}
+    textarea{resize:vertical;min-height:48px;max-height:160px}
+    input:focus,textarea:focus{border-color:#a98419;box-shadow:0 0 0 3px rgba(216,184,63,.2)}
+    .conversation{padding:13px 14px;border-bottom:1px solid var(--line);cursor:pointer}
+    .conversation:hover,.conversation.active{background:#fbf4d8}
+    .row{display:flex;justify-content:space-between;gap:10px;align-items:center}
+    .name{font-weight:900;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .badge{min-width:22px;height:22px;border-radius:999px;background:var(--gold);display:grid;place-items:center;font-size:12px;font-weight:900}
+    .preview{margin-top:6px;font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .time{font-size:11px;color:var(--muted);white-space:nowrap}
+    .empty{padding:28px;color:var(--muted);text-align:center}
+    .messages{padding:16px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+    .msg{max-width:min(680px,88%);padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:white;white-space:pre-wrap;line-height:1.38}
+    .msg.customer{align-self:flex-start}
+    .msg.admin{align-self:flex-end;background:var(--gold)}
+    .msg.system{align-self:center;background:#eee}
+    .msg img{display:block;max-width:260px;width:100%;margin-top:8px;border-radius:10px}
+    .meta{font-size:11px;color:var(--muted);margin-top:6px}
+    .composer{display:flex;gap:8px;padding:12px;background:white;border-top:1px solid var(--line)}
+    .composer textarea{min-height:46px}
+    .hidden{display:none!important}
+    .error{margin-top:12px;color:#a40000;font-weight:800}
+    .note{font-size:13px;color:var(--muted)}
+    @media(max-width:780px){
+      .wrap{grid-template-columns:1fr;min-height:calc(100dvh - 62px)}
+      .sidebar{display:block;max-height:42dvh;border-right:0;border-bottom:1px solid var(--line)}
+      .main{min-height:58dvh}
+      .top{padding:12px}
+    }
+  </style>
+</head>
+<body>
+  <div id="login" class="login">
+    <div class="brand"><div class="mark">R</div><div>RUTH ISTANBUL</div></div>
+    <h1>Canlı Destek Paneli</h1>
+    <label>Kullanıcı adı</label>
+    <input id="username" autocomplete="username" value="ruth">
+    <label>Şifre</label>
+    <input id="password" type="password" autocomplete="current-password">
+    <button id="loginBtn" class="btn primary" style="width:100%;margin-top:16px">Giriş yap</button>
+    <div id="loginError" class="error"></div>
+  </div>
+
+  <div id="app" class="hidden">
+    <div class="top">
+      <div class="brand"><div class="mark">R</div><div>RUTH ISTANBUL Panel</div></div>
+      <div class="row">
+        <button id="pushBtn" class="btn">Bildirim aç</button>
+        <button id="logoutBtn" class="btn danger">Çıkış</button>
+      </div>
+    </div>
+    <div class="wrap">
+      <aside class="sidebar">
+        <div class="toolbar">
+          <strong>Mesajlar</strong>
+          <button id="refreshBtn" class="btn">Yenile</button>
+        </div>
+        <div id="conversations"><div class="empty">Konuşmalar yükleniyor...</div></div>
+      </aside>
+      <main class="main">
+        <div class="toolbar">
+          <div>
+            <strong id="activeTitle">Konuşma seç</strong>
+            <div id="activeSub" class="note"></div>
+          </div>
+          <button id="closeBtn" class="btn">Kapat/Aç</button>
+        </div>
+        <div id="messages" class="messages"><div class="empty">Soldan bir konuşma seç.</div></div>
+        <form id="replyForm" class="composer">
+          <textarea id="reply" placeholder="Cevap yaz..." disabled></textarea>
+          <button id="sendBtn" class="btn primary" disabled>Gönder</button>
+        </form>
+      </main>
+    </div>
+  </div>
+
+<script>
+(function(){
+  var tokenKey = "ruth_admin_token";
+  var token = localStorage.getItem(tokenKey) || "";
+  var activeId = "";
+  var conversations = [];
+  var pollTimer = null;
+
+  var loginEl = document.getElementById("login");
+  var appEl = document.getElementById("app");
+  var usernameEl = document.getElementById("username");
+  var passwordEl = document.getElementById("password");
+  var loginBtn = document.getElementById("loginBtn");
+  var loginError = document.getElementById("loginError");
+  var conversationsEl = document.getElementById("conversations");
+  var messagesEl = document.getElementById("messages");
+  var activeTitle = document.getElementById("activeTitle");
+  var activeSub = document.getElementById("activeSub");
+  var replyForm = document.getElementById("replyForm");
+  var replyEl = document.getElementById("reply");
+  var sendBtn = document.getElementById("sendBtn");
+  var refreshBtn = document.getElementById("refreshBtn");
+  var logoutBtn = document.getElementById("logoutBtn");
+  var closeBtn = document.getElementById("closeBtn");
+  var pushBtn = document.getElementById("pushBtn");
+
+  loginBtn.addEventListener("click", login);
+  passwordEl.addEventListener("keydown", function(e){ if(e.key === "Enter") login(); });
+  refreshBtn.addEventListener("click", loadConversations);
+  logoutBtn.addEventListener("click", function(){ localStorage.removeItem(tokenKey); location.reload(); });
+  closeBtn.addEventListener("click", toggleStatus);
+  pushBtn.addEventListener("click", subscribePush);
+  replyForm.addEventListener("submit", sendReply);
+
+  boot();
+
+  function boot(){
+    if(!token) return showLogin();
+    api("/api/admin/me").then(function(me){
+      showApp();
+      pushBtn.style.display = me.pushReady ? "inline-block" : "none";
+      loadConversations();
+      pollTimer = setInterval(function(){
+        loadConversations(true);
+        if(activeId) loadMessages(activeId, true);
+      }, 4000);
+    }).catch(function(){
+      localStorage.removeItem(tokenKey);
+      showLogin();
+    });
+  }
+
+  function showLogin(){
+    loginEl.classList.remove("hidden");
+    appEl.classList.add("hidden");
+    setTimeout(function(){ passwordEl.focus(); }, 50);
+  }
+
+  function showApp(){
+    loginEl.classList.add("hidden");
+    appEl.classList.remove("hidden");
+  }
+
+  function login(){
+    loginError.textContent = "";
+    loginBtn.disabled = true;
+    fetch("/api/admin/login", {
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({username:usernameEl.value.trim(), password:passwordEl.value})
+    }).then(json).then(function(data){
+      if(!data.ok) throw new Error(data.error || "Giriş başarısız");
+      token = data.token;
+      localStorage.setItem(tokenKey, token);
+      showApp();
+      loadConversations();
+      pollTimer = setInterval(function(){
+        loadConversations(true);
+        if(activeId) loadMessages(activeId, true);
+      }, 4000);
+    }).catch(function(err){
+      loginError.textContent = "Giriş olmadı. Kullanıcı adı/şifreyi kontrol et.";
+    }).finally(function(){
+      loginBtn.disabled = false;
+    });
+  }
+
+  function loadConversations(silent){
+    if(!silent) conversationsEl.innerHTML = '<div class="empty">Konuşmalar yükleniyor...</div>';
+    return api("/api/admin/conversations").then(function(data){
+      conversations = data.conversations || [];
+      renderConversations();
+      var fromUrl = new URLSearchParams(location.search).get("conversation");
+      if(!activeId && fromUrl) selectConversation(fromUrl);
+      if(!activeId && conversations.length && !silent) selectConversation(conversations[0].id);
+    }).catch(function(err){
+      conversationsEl.innerHTML = '<div class="empty">Konuşmalar yüklenemedi: '+escapeHtml(err.message)+'</div>';
+    });
+  }
+
+  function renderConversations(){
+    if(!conversations.length){
+      conversationsEl.innerHTML = '<div class="empty">Henüz mesaj yok.</div>';
+      return;
+    }
+    conversationsEl.innerHTML = conversations.map(function(c){
+      return '<div class="conversation '+(c.id===activeId?'active':'')+'" data-id="'+escapeHtml(c.id)+'">'+
+        '<div class="row"><div class="name">'+escapeHtml(c.displayName || "Ziyaretçi")+'</div>'+
+        (c.unreadAdminCount ? '<div class="badge">'+c.unreadAdminCount+'</div>' : '<div class="time">'+formatDate(c.updatedAt)+'</div>')+
+        '</div><div class="preview">'+escapeHtml(c.lastMessageText || c.pageTitle || "Yeni konuşma")+'</div></div>';
+    }).join("");
+    Array.prototype.forEach.call(conversationsEl.querySelectorAll(".conversation"), function(el){
+      el.addEventListener("click", function(){ selectConversation(el.getAttribute("data-id")); });
+    });
+  }
+
+  function selectConversation(id){
+    activeId = id;
+    renderConversations();
+    loadMessages(id);
+  }
+
+  function loadMessages(id, silent){
+    var c = conversations.find(function(x){ return x.id === id; });
+    if(c){
+      activeTitle.textContent = c.displayName || "Ziyaretçi";
+      activeSub.textContent = (c.pageTitle || "") + (c.pageUrl ? " • " + c.pageUrl : "");
+    }
+    if(!silent) messagesEl.innerHTML = '<div class="empty">Mesajlar yükleniyor...</div>';
+    replyEl.disabled = false;
+    sendBtn.disabled = false;
+
+    return api("/api/admin/conversations/"+encodeURIComponent(id)+"/messages").then(function(data){
+      renderMessages(data.messages || []);
+      return api("/api/admin/conversations/"+encodeURIComponent(id)+"/read", {method:"POST"}).then(function(){});
+    }).catch(function(err){
+      messagesEl.innerHTML = '<div class="empty">Mesajlar yüklenemedi: '+escapeHtml(err.message)+'</div>';
+    });
+  }
+
+  function renderMessages(items){
+    if(!items.length){
+      messagesEl.innerHTML = '<div class="empty">Bu konuşmada mesaj yok.</div>';
+      return;
+    }
+    messagesEl.innerHTML = items.map(function(m){
+      return '<div class="msg '+escapeHtml(m.sender)+'">'+
+        '<div>'+escapeHtml(m.body || (m.imageData ? "Fotoğraf" : ""))+'</div>'+
+        (m.imageData ? '<img src="'+m.imageData+'" alt="Müşteri fotoğrafı">' : '')+
+        '<div class="meta">'+escapeHtml(m.sender)+' • '+formatDate(m.createdAt)+'</div>'+
+      '</div>';
+    }).join("");
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  function sendReply(e){
+    e.preventDefault();
+    var text = replyEl.value.trim();
+    if(!activeId || !text) return;
+    sendBtn.disabled = true;
+    api("/api/admin/conversations/"+encodeURIComponent(activeId)+"/reply", {
+      method:"POST",
+      body:JSON.stringify({message:text})
+    }).then(function(){
+      replyEl.value = "";
+      loadMessages(activeId);
+      loadConversations(true);
+    }).catch(function(err){
+      alert("Mesaj gönderilemedi: " + err.message);
+    }).finally(function(){
+      sendBtn.disabled = false;
+    });
+  }
+
+  function toggleStatus(){
+    if(!activeId) return;
+    var c = conversations.find(function(x){ return x.id === activeId; });
+    var next = c && c.status === "closed" ? "open" : "closed";
+    api("/api/admin/conversations/"+encodeURIComponent(activeId)+"/status", {
+      method:"POST",
+      body:JSON.stringify({status:next})
+    }).then(function(){ loadConversations(true); });
+  }
+
+  function subscribePush(){
+    if(!("serviceWorker" in navigator) || !("PushManager" in window)){
+      alert("Bu tarayıcı bildirim desteklemiyor.");
+      return;
+    }
+    api("/api/admin/me").then(function(me){
+      if(!me.vapidPublicKey) throw new Error("VAPID key yok");
+      return navigator.serviceWorker.register("/sw.js").then(function(reg){
+        return reg.pushManager.subscribe({
+          userVisibleOnly:true,
+          applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)
+        });
+      });
+    }).then(function(sub){
+      return api("/api/admin/push/subscribe", {method:"POST", body:JSON.stringify({subscription:sub})});
+    }).then(function(){
+      alert("Bildirim açıldı.");
+    }).catch(function(err){
+      alert("Bildirim açılamadı: " + err.message);
+    });
+  }
+
+  function api(url, options){
+    options = options || {};
+    options.headers = Object.assign({"Content-Type":"application/json"}, options.headers || {});
+    if(token) options.headers.Authorization = "Bearer " + token;
+    return fetch(url, options).then(json).then(function(data){
+      if(!data.ok) throw new Error(data.error || "İstek başarısız");
+      return data;
+    });
+  }
+
+  function json(response){
+    return response.json().catch(function(){ return {}; }).then(function(data){
+      if(!response.ok && !data.error) data.error = "HTTP " + response.status;
+      return data;
+    });
+  }
+
+  function escapeHtml(value){
+    return String(value || "")
+      .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+      .replace(/"/g,"&quot;").replace(/'/g,"&#039;");
+  }
+
+  function formatDate(value){
+    if(!value) return "";
+    var d = new Date(value);
+    if(isNaN(d.getTime())) return "";
+    return d.toLocaleString("tr-TR", {day:"2-digit", month:"2-digit", hour:"2-digit", minute:"2-digit"});
+  }
+
+  function urlBase64ToUint8Array(base64String){
+    var padding = "=".repeat((4 - base64String.length % 4) % 4);
+    var base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
+    var rawData = atob(base64);
+    var outputArray = new Uint8Array(rawData.length);
+    for(var i=0;i<rawData.length;++i) outputArray[i] = rawData.charCodeAt(i);
+    return outputArray;
+  }
+})();
+</script>
+</body>
+</html>`;
 }
 
 function sendFile(res, filePath) {
@@ -890,6 +1279,28 @@ function base64url(value) {
 
 function trimSlash(value) {
   return String(value || "").replace(/\/+$/, "");
+}
+
+function normalizeSupabaseUrl(value) {
+  const raw = trimSlash(value);
+  if (!raw) return "";
+
+  try {
+    const parsed = new URL(raw);
+
+    if (parsed.hostname === "supabase.com") {
+      const match = parsed.pathname.match(/\/dashboard\/project\/([^/]+)/);
+      if (match && match[1]) return `https://${match[1]}.supabase.co`;
+    }
+
+    if (parsed.hostname.endsWith(".supabase.co")) {
+      return parsed.origin;
+    }
+
+    return trimSlash(raw.replace(/\/rest\/v1\/?$/i, ""));
+  } catch (error) {
+    return trimSlash(raw.replace(/\/rest\/v1\/?$/i, ""));
+  }
 }
 
 function toConversationRow(item) {
