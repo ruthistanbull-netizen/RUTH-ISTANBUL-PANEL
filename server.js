@@ -86,7 +86,9 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, { ok: false, error: "not_found" }, 404);
   } catch (error) {
     console.error("RUTH support error:", error && error.stack ? error.stack : error);
-    sendJson(res, { ok: false, error: "server_error" }, 500);
+    if (!res.headersSent && !res.writableEnded) {
+      sendJson(res, { ok: false, error: "server_error" }, 500);
+    }
   }
 });
 
@@ -1130,11 +1132,13 @@ function readJson(req, limit = 1_000_000) {
 }
 
 function sendJson(res, payload, status = 200) {
+  if (res.headersSent || res.writableEnded) return true;
   res.writeHead(status, {
     "Content-Type": "application/json; charset=utf-8",
     "Cache-Control": "no-store"
   });
   res.end(JSON.stringify(payload));
+  return true;
 }
 
 function setCors(res) {
