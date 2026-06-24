@@ -83,7 +83,7 @@ const IKAS_CLIENT_SECRET = String(process.env.IKAS_CLIENT_SECRET || "").trim();
 const IKAS_GRAPHQL_URL = String(process.env.IKAS_GRAPHQL_URL || "https://api.myikas.com/api/v1/admin/graphql").trim();
 const IKAS_TOKEN_URL = IKAS_STORE_NAME ? `https://${IKAS_STORE_NAME}.myikas.com/api/admin/oauth/token` : "";
 const IKAS_STOREFRONT_URL = normalizeStorefrontUrl(process.env.IKAS_STOREFRONT_URL || process.env.RUTH_SITE_URL || "https://ruthistanbul.com");
-const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_FETCH_STOREFRONT_IMAGES || "0") === "1";
+const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_PRODUCT_IMAGES_DISABLED || "0") !== "1";
 let ikasTokenCache = { token: "", expiresAt: 0 };
 let storefrontImageCache = { expiresAt: 0, bySlug: new Map(), byName: new Map(), urls: [] };
 let ikasSummaryCache = { expiresAt: 0, value: null };
@@ -509,9 +509,17 @@ async function handleAdminApi(req, res, url) {
     return sendJson(res, debug);
   }
 
-  if (req.method === "GET" && pathname === "/api/admin/ikas/image-debug") {
-    const debug = await buildIkasImageDebug();
-    return sendJson(res, debug);
+  if (req.method === "GET" && pathname === "/api/admin/ikas/image-status") {
+    const summary = await buildIkasSummary();
+    return sendJson(res, {
+      ok: true,
+      products: (summary.products || []).length,
+      productsWithImage: (summary.products || []).filter((p) => p.image).length,
+      orders: (summary.orders || []).length,
+      orderItemsWithImage: (summary.orders || []).reduce((sum, o) => sum + (o.items || []).filter((i) => i.image).length, 0),
+      sampleProducts: (summary.products || []).slice(0, 10).map((p) => ({ name: p.name, image: p.image || "" })),
+      updatedAt: summary.updatedAt || ""
+    });
   }
 
   if (req.method === "GET" && pathname === "/api/admin/ikas/summary") {
@@ -612,130 +620,6 @@ async function buildIkasDebug() {
   result.message = "Bu çıktıyı ChatGPT'ye at; hangi ikas alanının çalıştığını buna göre net sabitleyelim.";
   return result;
 }
-
-
-async function buildIkasImageDebug() {
-  const result = {
-    ok: true,
-    generatedAt: new Date().toISOString(),
-    note: "Bu endpoint ana ikas API akışını bozmaz. Sadece ürün fotoğraf alanlarını test eder.",
-    tests: []
-  };
-
-  if (!ikasConfigured()) {
-    result.ok = false;
-    result.error = "ikas env yok";
-    return result;
-  }
-
-  const tokenTest = await debugTokenRequest();
-  result.token = tokenTest;
-  if (!tokenTest.ok) {
-    result.ok = false;
-    return result;
-  }
-
-  async function run(label, query) {
-    try {
-      const response = await ikasGraphQL(query);
-      const root = response && response.data && response.data.listProduct;
-      const data = root && Array.isArray(root.data) ? root.data : [];
-      const sample = data.slice(0, 5).map((p) => ({
-        id: valueOrEmpty(p.id),
-        name: valueOrEmpty(p.name),
-        keys: p && typeof p === "object" ? Object.keys(p) : [],
-        rawPreview: JSON.stringify(p || {}).slice(0, 1200),
-        imageGuess: findPossibleImageInAnyObject(p)
-      }));
-      return {
-        label,
-        ok: true,
-        count: Number(root && root.count || data.length || 0),
-        hasNext: Boolean(root && root.hasNext),
-        sample
-      };
-    } catch (error) {
-      return {
-        label,
-        ok: false,
-        error: error && error.message ? error.message : String(error)
-      };
-    }
-  }
-
-  const tests = [
-    ["minimal", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name categoryIds } } }`],
-    ["images_id_url", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name categoryIds images { id imageId url imageUrl } } } }`],
-    ["main_image_id", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name categoryIds mainImageId imageId } } }`],
-    ["media_fields", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name media { id url imageUrl } } } }`],
-    ["variant_images", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name variants { id sku images { id imageId url imageUrl } mainImageId imageId } } } }`]
-  ];
-
-  for (const [label, query] of tests) {
-    result.tests.push(await run(label, query));
-  }
-
-  // Storefront tarafını da bozmadan test et.
-  try {
-    const urls = await discoverStorefrontProductUrls();
-    result.storefront = {
-      ok: true,
-      urlCount: urls.length,
-      sampleUrls: urls.slice(0, 10)
-    };
-    const sampleImages = [];
-    for (const url of urls.slice(0, 5)) {
-      try {
-        const info = await fetchStorefrontProductImage(url);
-        sampleImages.push(info);
-      } catch (error) {
-        sampleImages.push({ url, error: error && error.message ? error.message : String(error) });
-      }
-    }
-    result.storefront.sampleImages = sampleImages;
-  } catch (error) {
-    result.storefront = {
-      ok: false,
-      error: error && error.message ? error.message : String(error)
-    };
-  }
-
-  result.bestNextStep = "Bunu ChatGPT'ye at. Hangi test ok:true dönüyor ve imageGuess doluysa ana ürün listesine sadece o alanı güvenli ekleyeceğiz.";
-  return result;
-}
-
-function findPossibleImageInAnyObject(value, depth = 0) {
-  if (!value || depth > 5) return "";
-  if (typeof value === "string") {
-    const raw = value.trim();
-    if (/^https?:\/\//i.test(raw) && /\.(png|jpe?g|webp|gif)(\?|$)/i.test(raw)) return raw;
-    if (/^data:image\//i.test(raw)) return raw.slice(0, 180);
-    return "";
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = findPossibleImageInAnyObject(item, depth + 1);
-      if (found) return found;
-    }
-    return "";
-  }
-  if (typeof value === "object") {
-    const priority = ["imageUrl", "imageURL", "image", "url", "src", "thumbnailUrl", "mainImageUrl", "cdnUrl"];
-    for (const key of priority) {
-      if (Object.prototype.hasOwnProperty.call(value, key)) {
-        const found = findPossibleImageInAnyObject(value[key], depth + 1);
-        if (found) return found;
-      }
-    }
-    for (const key of Object.keys(value)) {
-      if (!/image|photo|media|url|src|file/i.test(key)) continue;
-      const found = findPossibleImageInAnyObject(value[key], depth + 1);
-      if (found) return found;
-    }
-  }
-  return "";
-}
-
 
 async function debugTokenRequest() {
   const body = new URLSearchParams();
@@ -1350,7 +1234,7 @@ async function buildIkasSummary() {
 
   orders = enrichOrdersWithProducts(orders, products);
   products = mergeOrderImagesIntoProducts(products, orders);
-  if (String(process.env.IKAS_FETCH_STOREFRONT_IMAGES || "0") === "1") {
+  if (IKAS_FETCH_STOREFRONT_IMAGES) {
     await enrichIkasImagesDirectFromProductPages(orders, products, categories);
     await enrichIkasImagesFromStorefront(orders, products, categories);
   }
@@ -1539,7 +1423,7 @@ async function enrichIkasImagesDirectFromProductPages(orders, products, categori
   });
 
   if (!targets.length) return;
-  const limit = Math.max(1, Math.min(150, Number(process.env.IKAS_DIRECT_IMAGE_LIMIT || 80)));
+  const limit = Math.max(1, Math.min(80, Number(process.env.IKAS_DIRECT_IMAGE_LIMIT || 45)));
   const limited = targets.slice(0, limit);
   const concurrency = Math.max(1, Math.min(3, Number(process.env.IKAS_DIRECT_IMAGE_CONCURRENCY || 2)));
   let index = 0;
@@ -1619,11 +1503,22 @@ function buildStorefrontProductUrlCandidates(item) {
     }
   });
 
-  const unique = [...new Set(slugs)].slice(0, 8);
-  return unique.map((slug) => {
-    if (/^https?:\/\//i.test(slug)) return slug;
-    return new URL(`/${slug}`, IKAS_STOREFRONT_URL).toString();
+  const unique = [...new Set(slugs)].slice(0, 10);
+  const urls = [];
+  unique.forEach((slug) => {
+    if (/^https?:\/\//i.test(slug)) {
+      urls.push(slug);
+      return;
+    }
+    [
+      `/${slug}`,
+      `/products/${slug}`,
+      `/product/${slug}`,
+      `/urun/${slug}`,
+      `/p/${slug}`
+    ].forEach((path) => urls.push(new URL(path, IKAS_STOREFRONT_URL).toString()));
   });
+  return [...new Set(urls)].slice(0, 20);
 }
 
 async function enrichIkasImagesFromStorefront(orders, products, categories) {
@@ -1683,7 +1578,7 @@ async function getStorefrontImageMap() {
   const bySlug = new Map();
   const byName = new Map();
   const urls = await discoverStorefrontProductUrls();
-  const limited = urls.slice(0, Number(process.env.IKAS_STOREFRONT_IMAGE_LIMIT || 120));
+  const limited = urls.slice(0, Number(process.env.IKAS_STOREFRONT_IMAGE_LIMIT || 80));
   const concurrency = Math.max(1, Math.min(3, Number(process.env.IKAS_STOREFRONT_IMAGE_CONCURRENCY || 2)));
   let index = 0;
   async function worker() {
@@ -1720,11 +1615,28 @@ async function discoverStorefrontProductUrls() {
     });
   }
 
-  if (!productUrls.size) {
-    // Bazı ikas temalarında sitemap ürün URL'lerini gizleyebiliyor. Yine de ana sayfadan yakalamayı deneriz.
+  // Sitemap boşsa veya ürün vermiyorsa ana sayfa + koleksiyon sayfalarını tara.
+  const seedPaths = [
+    "/",
+    "/rings",
+    "/necklaces",
+    "/bracelets",
+    "/sets",
+    "/collections",
+    "/shop",
+    "/all",
+    "/ruth-atelier",
+    "/nazar",
+    "/sun-kissed",
+    "/arya",
+    "/huna"
+  ];
+
+  for (const pathName of seedPaths) {
     try {
-      const html = await fetchText(IKAS_STOREFRONT_URL);
-      extractProductUrlsFromHtml(html, IKAS_STOREFRONT_URL).forEach((url) => productUrls.add(url));
+      const url = new URL(pathName, IKAS_STOREFRONT_URL).toString();
+      const html = await fetchText(url);
+      extractProductUrlsFromHtml(html, url).forEach((url) => productUrls.add(url));
     } catch (error) {}
   }
 
@@ -1733,7 +1645,13 @@ async function discoverStorefrontProductUrls() {
 
 function isLikelyProductUrl(url) {
   const text = String(url || "");
-  return /\/(products|product|urun|ürün)\//i.test(text);
+  if (/\/(products|product|urun|ürün|p)\//i.test(text)) return true;
+  try {
+    const u = new URL(text);
+    const parts = u.pathname.split("/").filter(Boolean);
+    if (parts.length === 1 && /ring|necklace|bracelet|set|kolye|yuzuk|yüzük|bileklik|earring|kupe|küpe|golden|nazar|sacred|ancient|gaze|leaf|temple|glyph|oracle|archive/i.test(parts[0])) return true;
+  } catch (error) {}
+  return false;
 }
 
 function extractProductUrlsFromHtml(html, baseUrl) {
@@ -1769,14 +1687,22 @@ async function fetchStorefrontProductImage(url) {
 }
 
 async function fetchText(url) {
-  const response = await fetch(url, {
-    headers: {
-      "User-Agent": "Mozilla/5.0 RuthIstanbulPanel/1.0",
-      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
-    }
-  });
-  if (!response.ok) throw new Error(`fetch ${response.status} ${url}`);
-  return response.text();
+  const timeoutMs = Math.max(2500, Math.min(12000, Number(process.env.IKAS_STOREFRONT_FETCH_TIMEOUT_MS || 4500)));
+  const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+  try {
+    const response = await fetch(url, {
+      signal: controller ? controller.signal : undefined,
+      headers: {
+        "User-Agent": "Mozilla/5.0 RuthIstanbulPanel/1.0",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+      }
+    });
+    if (!response.ok) throw new Error(`fetch ${response.status} ${url}`);
+    return await response.text();
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function pickMeta(html, property) {
