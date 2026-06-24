@@ -188,7 +188,7 @@ const server = http.createServer(async (req, res) => {
         const withImage = products.filter((p) => p.image).length;
         const rows = missing.map((p, index) => {
           const slug = slugifyForUrl(p.name || "");
-          const candidates = buildStorefrontProductUrlCandidates({ name: p.name || "", baseName: p.name || "", slug: p.slug || "" }).slice(0, 5);
+          const candidates = buildStorefrontProductUrlCandidates({ name: p.name || "", baseName: p.name || "", slug: p.slug || "" }).slice(0, 8);
           const candidate = candidates[0] || (p.name ? new URL("/" + slug, IKAS_STOREFRONT_URL).toString() : "");
           const candidateLinks = candidates.length ? candidates.map((u) => `<a href="${escapeHtmlServer(u)}" target="_blank">${escapeHtmlServer(u)}</a>`).join("<br>") : (candidate ? `<a href="${escapeHtmlServer(candidate)}" target="_blank">${escapeHtmlServer(candidate)}</a>` : "-");
           const cats = (p.categoryNames || []).join(", ");
@@ -1269,7 +1269,7 @@ function buildCollectionsFromProducts(products, categories = []) {
 }
 
 async function buildIkasSummary() {
-  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 300000));
+  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 120000));
   if (cacheMs && ikasSummaryCache.value && ikasSummaryCache.expiresAt > Date.now()) {
     return ikasSummaryCache.value;
   }
@@ -1283,7 +1283,7 @@ async function buildIkasSummary() {
 }
 
 async function buildIkasSummaryFresh() {
-  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 300000));
+  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 120000));
   if (!ikasConfigured()) {
     return {
       connected: false,
@@ -1371,7 +1371,7 @@ async function buildIkasSummaryFresh() {
     collections,
     categories
   };
-  ikasSummaryCache = { expiresAt: Date.now() + Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 300000)), value: summary };
+  ikasSummaryCache = { expiresAt: Date.now() + Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 120000)), value: summary };
   return summary;
 }
 
@@ -1495,29 +1495,55 @@ function buildIkasImageUrl(mainImageId) {
 
 
 
+
 const RUTH_PRODUCT_SLUG_MAP = new Map([
-  ["hraesvelgr", ["hrsvelgr"]],
-  ["hrasvelgr", ["hrsvelgr"]],
-  ["hr-svelgr", ["hrsvelgr"]],
+  ["hraesvelgr", ["hrsvelgr", "hraesvelgr"]],
+  ["hrasvelgr", ["hrsvelgr", "hraesvelgr"]],
+  ["hr-svelgr", ["hrsvelgr", "hraesvelgr"]],
   ["sekia-ring", ["sekia"]],
   ["sekia-ring-ayarlanabilir", ["sekia"]],
   ["the-ancient-coin-necklace", ["ancient-coin-necklace"]],
   ["the-ancient-hamsa-hand-necklace", ["ancient-hamsa-hand-necklace"]],
   ["the-ancient-sage-necklace", ["ancient-sage-necklace"]],
-  ["the-ancient-poetry-ring", ["ancient-poetry-ring-brass"]],
+  ["the-ancient-swan-necklace", ["ancient-swan-necklace"]],
+  ["the-ancient-water-friend-necklace", ["ancient-water-friend-necklace"]],
+  ["the-ancient-poetry-ring", ["ancient-poetry-ring-brass", "ancient-poetry-ring"]],
   ["the-crystal-mine-ring", ["crystal-mine-ring"]],
-  ["the-pirates-treasure-ring", ["the-pirates-treasure-ring"]],
-  ["pirates-treasure-ring", ["the-pirates-treasure-ring"]]
+  ["the-crystal-path-bracelet", ["crystal-path-bracelet"]],
+  ["the-gemston-ring", ["gemstone-ring", "gemston-ring"]],
+  ["the-gemstone-ring", ["gemstone-ring"]],
+  ["the-heavens-key-necklace", ["heavens-key-necklace"]],
+  ["the-night-path-necklace", ["night-path-necklace"]],
+  ["the-obsidian-sun-necklace", ["obsidian-sun-necklace"]],
+  ["the-sirens-scroll-necklace", ["sirens-scroll-necklace", "siren-scroll-necklace"]],
+  ["the-siren-s-scroll-necklace", ["sirens-scroll-necklace", "siren-scroll-necklace"]],
+  ["the-sunrise-necklace", ["sunrise-necklace"]],
+  ["thea", ["thea"]],
+  ["vidha", ["vidha"]],
+  ["deva", ["deva"]],
+  ["gardedis", ["gardedis"]],
+  ["kasun", ["kasun"]],
+  ["ma", ["ma"]],
+  ["sira", ["sira"]],
+  ["avis", ["avis"]],
+  ["eros", ["eros"]]
 ]);
 
-function addMappedRuthProductSlugs(slugs) {
+function getMappedRuthProductSlugs(slugs) {
+  const mappedPriority = [];
   const existing = [...slugs];
   existing.forEach((slug) => {
     const key = normalizeSlug(slug);
     const mapped = RUTH_PRODUCT_SLUG_MAP.get(key);
-    if (mapped) mapped.forEach((value) => slugs.push(value));
+    if (mapped) mapped.forEach((value) => mappedPriority.push(value));
   });
+  return mappedPriority;
 }
+
+function addMappedRuthProductSlugs(slugs) {
+  getMappedRuthProductSlugs(slugs).forEach((value) => slugs.push(value));
+}
+
 
 async function enrichIkasImagesDirectFromProductPages(orders, products, categories) {
   if (!IKAS_FETCH_STOREFRONT_IMAGES || !IKAS_STOREFRONT_URL) return;
@@ -1546,7 +1572,7 @@ async function enrichIkasImagesDirectFromProductPages(orders, products, categori
   });
 
   if (!targets.length) return;
-  const limit = Math.max(1, Math.min(140, Number(process.env.IKAS_DIRECT_IMAGE_LIMIT || 110)));
+  const limit = Math.max(1, Math.min(220, Number(process.env.IKAS_DIRECT_IMAGE_LIMIT || 180)));
   const limited = targets.slice(0, limit);
   const concurrency = Math.max(1, Math.min(3, Number(process.env.IKAS_DIRECT_IMAGE_CONCURRENCY || 2)));
   let index = 0;
@@ -1641,8 +1667,8 @@ function buildStorefrontProductUrlCandidates(item) {
     });
   });
 
-  addMappedRuthProductSlugs(slugs);
-  const unique = [...new Set(slugs)].slice(0, 24);
+  const mappedPriority = getMappedRuthProductSlugs(slugs);
+  const unique = [...new Set([...mappedPriority, ...slugs])].slice(0, 36);
   const urls = [];
   unique.forEach((slug) => {
     if (/^https?:\/\//i.test(slug)) {
@@ -1657,7 +1683,7 @@ function buildStorefrontProductUrlCandidates(item) {
       `/p/${slug}`
     ].forEach((path) => urls.push(new URL(path, IKAS_STOREFRONT_URL).toString()));
   });
-  return [...new Set(urls)].slice(0, 40);
+  return [...new Set(urls)].slice(0, 80);
 }
 
 async function enrichIkasImagesFromStorefront(orders, products, categories) {
