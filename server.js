@@ -83,7 +83,7 @@ const IKAS_CLIENT_SECRET = String(process.env.IKAS_CLIENT_SECRET || "").trim();
 const IKAS_GRAPHQL_URL = String(process.env.IKAS_GRAPHQL_URL || "https://api.myikas.com/api/v1/admin/graphql").trim();
 const IKAS_TOKEN_URL = IKAS_STORE_NAME ? `https://${IKAS_STORE_NAME}.myikas.com/api/admin/oauth/token` : "";
 const IKAS_STOREFRONT_URL = normalizeStorefrontUrl(process.env.IKAS_STOREFRONT_URL || process.env.RUTH_SITE_URL || "https://ruthistanbul.com");
-const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_PRODUCT_IMAGES_DISABLED || "0") !== "1";
+const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_FETCH_STOREFRONT_IMAGES || "0") === "1";
 let ikasTokenCache = { token: "", expiresAt: 0 };
 let storefrontImageCache = { expiresAt: 0, bySlug: new Map(), byName: new Map(), urls: [] };
 let ikasSummaryCache = { expiresAt: 0, value: null };
@@ -509,6 +509,11 @@ async function handleAdminApi(req, res, url) {
     return sendJson(res, debug);
   }
 
+  if (req.method === "GET" && pathname === "/api/admin/ikas/image-debug") {
+    const debug = await buildIkasImageDebug();
+    return sendJson(res, debug);
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/ikas/summary") {
     try {
       const summary = await buildIkasSummary();
@@ -607,6 +612,130 @@ async function buildIkasDebug() {
   result.message = "Bu çıktıyı ChatGPT'ye at; hangi ikas alanının çalıştığını buna göre net sabitleyelim.";
   return result;
 }
+
+
+async function buildIkasImageDebug() {
+  const result = {
+    ok: true,
+    generatedAt: new Date().toISOString(),
+    note: "Bu endpoint ana ikas API akışını bozmaz. Sadece ürün fotoğraf alanlarını test eder.",
+    tests: []
+  };
+
+  if (!ikasConfigured()) {
+    result.ok = false;
+    result.error = "ikas env yok";
+    return result;
+  }
+
+  const tokenTest = await debugTokenRequest();
+  result.token = tokenTest;
+  if (!tokenTest.ok) {
+    result.ok = false;
+    return result;
+  }
+
+  async function run(label, query) {
+    try {
+      const response = await ikasGraphQL(query);
+      const root = response && response.data && response.data.listProduct;
+      const data = root && Array.isArray(root.data) ? root.data : [];
+      const sample = data.slice(0, 5).map((p) => ({
+        id: valueOrEmpty(p.id),
+        name: valueOrEmpty(p.name),
+        keys: p && typeof p === "object" ? Object.keys(p) : [],
+        rawPreview: JSON.stringify(p || {}).slice(0, 1200),
+        imageGuess: findPossibleImageInAnyObject(p)
+      }));
+      return {
+        label,
+        ok: true,
+        count: Number(root && root.count || data.length || 0),
+        hasNext: Boolean(root && root.hasNext),
+        sample
+      };
+    } catch (error) {
+      return {
+        label,
+        ok: false,
+        error: error && error.message ? error.message : String(error)
+      };
+    }
+  }
+
+  const tests = [
+    ["minimal", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name categoryIds } } }`],
+    ["images_id_url", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name categoryIds images { id imageId url imageUrl } } } }`],
+    ["main_image_id", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name categoryIds mainImageId imageId } } }`],
+    ["media_fields", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name media { id url imageUrl } } } }`],
+    ["variant_images", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name variants { id sku images { id imageId url imageUrl } mainImageId imageId } } } }`]
+  ];
+
+  for (const [label, query] of tests) {
+    result.tests.push(await run(label, query));
+  }
+
+  // Storefront tarafını da bozmadan test et.
+  try {
+    const urls = await discoverStorefrontProductUrls();
+    result.storefront = {
+      ok: true,
+      urlCount: urls.length,
+      sampleUrls: urls.slice(0, 10)
+    };
+    const sampleImages = [];
+    for (const url of urls.slice(0, 5)) {
+      try {
+        const info = await fetchStorefrontProductImage(url);
+        sampleImages.push(info);
+      } catch (error) {
+        sampleImages.push({ url, error: error && error.message ? error.message : String(error) });
+      }
+    }
+    result.storefront.sampleImages = sampleImages;
+  } catch (error) {
+    result.storefront = {
+      ok: false,
+      error: error && error.message ? error.message : String(error)
+    };
+  }
+
+  result.bestNextStep = "Bunu ChatGPT'ye at. Hangi test ok:true dönüyor ve imageGuess doluysa ana ürün listesine sadece o alanı güvenli ekleyeceğiz.";
+  return result;
+}
+
+function findPossibleImageInAnyObject(value, depth = 0) {
+  if (!value || depth > 5) return "";
+  if (typeof value === "string") {
+    const raw = value.trim();
+    if (/^https?:\/\//i.test(raw) && /\.(png|jpe?g|webp|gif)(\?|$)/i.test(raw)) return raw;
+    if (/^data:image\//i.test(raw)) return raw.slice(0, 180);
+    return "";
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findPossibleImageInAnyObject(item, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof value === "object") {
+    const priority = ["imageUrl", "imageURL", "image", "url", "src", "thumbnailUrl", "mainImageUrl", "cdnUrl"];
+    for (const key of priority) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        const found = findPossibleImageInAnyObject(value[key], depth + 1);
+        if (found) return found;
+      }
+    }
+    for (const key of Object.keys(value)) {
+      if (!/image|photo|media|url|src|file/i.test(key)) continue;
+      const found = findPossibleImageInAnyObject(value[key], depth + 1);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+
 
 async function debugTokenRequest() {
   const body = new URLSearchParams();
@@ -982,25 +1111,6 @@ async function fetchIkasProducts(categories = []) {
   // Variant alanları mağazaya göre farklı çıktığı için ürün listesini patlatmamak adına burada çekmiyoruz.
   const attempts = [
     {
-      label: "ikas products image-url-fields",
-      fields: `
-        id
-        name
-        categoryIds
-        images { id imageId url imageUrl }
-      `
-    },
-    {
-      label: "ikas products image-id-fields",
-      fields: `
-        id
-        name
-        categoryIds
-        mainImageId
-        images { id imageId }
-      `
-    },
-    {
       label: "ikas products categoryIds-only",
       fields: `
         id
@@ -1038,57 +1148,6 @@ async function fetchIkasProducts(categories = []) {
   console.error("ikas products error:", errors.join(" || ").slice(0, 1800));
   return [];
 }
-
-
-function extractIkasImageValue(value, depth = 0) {
-  if (!value || depth > 4) return "";
-  if (typeof value === "string") {
-    const raw = value.trim();
-    if (!raw) return "";
-    if (/^https?:\/\//i.test(raw) || /^data:image\//i.test(raw)) return raw;
-    // uuid / imageId gibi değerler için IKAS_IMAGE_BASE_URL tanımlıysa URL kur.
-    if (/^[a-z0-9_-]{8,}$/i.test(raw)) return buildIkasImageUrl(raw);
-    return "";
-  }
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const found = extractIkasImageValue(item, depth + 1);
-      if (found) return found;
-    }
-    return "";
-  }
-  if (typeof value === "object") {
-    const priorityKeys = ["url", "imageUrl", "imageURL", "src", "thumbnailUrl", "cdnUrl", "image", "mainImage", "mainImageUrl", "mainImageId", "imageId", "fileId"];
-    for (const key of priorityKeys) {
-      if (Object.prototype.hasOwnProperty.call(value, key)) {
-        const found = extractIkasImageValue(value[key], depth + 1);
-        if (found) return found;
-      }
-    }
-    for (const key of Object.keys(value)) {
-      if (!/image|photo|media|file|url|src/i.test(key)) continue;
-      const found = extractIkasImageValue(value[key], depth + 1);
-      if (found) return found;
-    }
-  }
-  return "";
-}
-
-function extractIkasProductImage(product) {
-  if (!product || typeof product !== "object") return "";
-  return extractIkasImageValue([
-    product.image,
-    product.imageUrl,
-    product.thumbnailUrl,
-    product.mainImage,
-    product.mainImageUrl,
-    product.mainImageId,
-    product.images,
-    product.media,
-    product.files
-  ]);
-}
-
 
 function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
   return rawProducts.map((product) => {
@@ -1128,7 +1187,7 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
         name: valueOrEmpty(product.name) || "Ürün",
         sku: valueOrEmpty(variant.sku),
         barcode: Array.isArray(variant.barcodeList) ? variant.barcodeList.join(", ") : "",
-        mainImageId: valueOrEmpty(product.mainImageId || product.imageId),
+        mainImageId: "",
         image: "",
         productId: valueOrEmpty(product.id),
         slug: "",
@@ -1140,7 +1199,7 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
       };
     }) : [];
 
-    const image = extractIkasProductImage(product);
+    const image = "";
     return {
       id: valueOrEmpty(product.id),
       name: valueOrEmpty(product.name) || "Ürün",
@@ -1291,7 +1350,7 @@ async function buildIkasSummary() {
 
   orders = enrichOrdersWithProducts(orders, products);
   products = mergeOrderImagesIntoProducts(products, orders);
-  if (IKAS_FETCH_STOREFRONT_IMAGES) {
+  if (String(process.env.IKAS_FETCH_STOREFRONT_IMAGES || "0") === "1") {
     await enrichIkasImagesDirectFromProductPages(orders, products, categories);
     await enrichIkasImagesFromStorefront(orders, products, categories);
   }
@@ -1447,7 +1506,7 @@ function buildIkasImageUrl(mainImageId) {
   const id = valueOrEmpty(mainImageId);
   if (!id) return "";
   if (/^https?:\/\//i.test(id)) return id;
-  const base = String(process.env.IKAS_IMAGE_BASE_URL || process.env.IKAS_CDN_URL || "").trim().replace(/\/+$/, "");
+  const base = String(process.env.IKAS_IMAGE_BASE_URL || "").trim().replace(/\/+$/, "");
   if (base) return `${base}/${encodeURIComponent(id)}`;
   return "";
 }
@@ -1560,25 +1619,11 @@ function buildStorefrontProductUrlCandidates(item) {
     }
   });
 
-  const unique = [...new Set(slugs)].slice(0, 10);
-  const urls = [];
-  unique.forEach((slug) => {
-    if (/^https?:\/\//i.test(slug)) {
-      urls.push(slug);
-      return;
-    }
-    [
-      `/${slug}`,
-      `/products/${slug}`,
-      `/product/${slug}`,
-      `/urun/${slug}`,
-      `/ürün/${slug}`,
-      `/p/${slug}`,
-      `/tr/products/${slug}`,
-      `/tr/urun/${slug}`
-    ].forEach((path) => urls.push(new URL(path, IKAS_STOREFRONT_URL).toString()));
+  const unique = [...new Set(slugs)].slice(0, 8);
+  return unique.map((slug) => {
+    if (/^https?:\/\//i.test(slug)) return slug;
+    return new URL(`/${slug}`, IKAS_STOREFRONT_URL).toString();
   });
-  return [...new Set(urls)].slice(0, 24);
 }
 
 async function enrichIkasImagesFromStorefront(orders, products, categories) {
@@ -1688,14 +1733,7 @@ async function discoverStorefrontProductUrls() {
 
 function isLikelyProductUrl(url) {
   const text = String(url || "");
-  if (/\/(products|product|urun|ürün|p)\//i.test(text)) return true;
-  // ikas bazı temalarda ürünleri direkt /the-golden-ring gibi kök slug ile tutabiliyor.
-  try {
-    const u = new URL(text);
-    const parts = u.pathname.split("/").filter(Boolean);
-    if (parts.length === 1 && /ring|necklace|bracelet|set|kolye|yuzuk|yüzük|bileklik|earring|küpe|kupe/i.test(parts[0])) return true;
-  } catch (error) {}
-  return false;
+  return /\/(products|product|urun|ürün)\//i.test(text);
 }
 
 function extractProductUrlsFromHtml(html, baseUrl) {
@@ -2421,10 +2459,6 @@ function adminHtml(serverAdmin) {
     @media(max-width:1180px){.layout-overview{grid-template-columns:1fr}.right-rail{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(2,1fr)}.modules,.bottom-grid{grid-template-columns:1fr}.support-grid,.crm-grid,.orders-grid{grid-template-columns:1fr;height:auto}.panel{min-height:360px}.page-head{align-items:flex-start;flex-direction:column}.head-tools{width:100%;justify-content:flex-start}.date-filter{width:100%}.date-select{flex:1;min-width:160px}.date-input{flex:1;min-width:130px}}
     @media(max-width:820px){body{overflow-y:auto;overflow-x:hidden}.app{display:block;height:auto;min-height:100dvh}.sidebar{position:fixed;left:0;top:0;bottom:0;width:286px;transform:translateX(-104%);box-shadow:var(--shadow)}.app.mobile-open .sidebar{transform:translateX(0)}.drawer-shade{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:35}.app.mobile-open .drawer-shade{display:block}.main{min-height:100dvh}.topbar{padding:0 14px}.mobile-menu{display:grid}.top-actions .top-icon:nth-child(1),.profile-copy{display:none}.content{padding:14px}.welcome{height:auto;display:block;padding:20px}.date-pill{margin-top:16px;width:100%}.metrics{grid-template-columns:1fr}.right-rail{grid-template-columns:1fr}.support-grid,.crm-grid{gap:12px}.modules{gap:12px}.module{min-height:170px}.bottom-grid{gap:12px}.message-space{min-height:360px}.msg{max-width:88%}.date-filter{display:grid;grid-template-columns:1fr}.date-custom{grid-template-columns:1fr auto 1fr}.date-filter.custom .date-custom{display:grid}}
 .pager{display:flex;align-items:center;justify-content:center;gap:8px;margin:16px 0 6px;flex-wrap:wrap}.pager button{min-width:36px;height:34px;border:1px solid var(--line);border-radius:9px;background:rgba(255,255,255,.035);color:var(--text);font-weight:780}.pager button:hover{border-color:rgba(212,162,55,.42);background:rgba(255,255,255,.065)}.pager button.active{background:linear-gradient(180deg,#efc86b,#b9862a);color:#130c03;border-color:#c99737}.pager button:disabled{opacity:.45;cursor:not-allowed}.search-box{min-width:220px;max-width:320px}.welcome .date-filter{margin-left:auto}.welcome .date-select,.welcome .date-input{background:#0c0d0f}@media(max-width:820px){.search-box{min-width:0;max-width:none;width:100%}.page-head{align-items:flex-start}.head-tools{width:100%;justify-content:stretch}.head-tools .btn,.head-tools .search-box{width:100%}.welcome .date-filter{margin-top:16px;width:100%;margin-left:0}.pager{justify-content:flex-start}.order-card,.product-card{overflow:hidden}}
-  
-      .prod-img img{width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit}
-      .prod-img.large{width:82px;height:82px}
-
   </style>
 </head>
 <body>
@@ -2605,7 +2639,7 @@ function adminHtml(serverAdmin) {
 (function(){
   var token=localStorage.getItem('ruth_admin_token')||'';
   var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null;
-  var storedDatePreset=localStorage.getItem('ruth_panel_date_preset'); var datePreset=storedDatePreset||'today'; if(!localStorage.getItem('ruth_panel_date_default_today_v18')){datePreset='today'; localStorage.setItem('ruth_panel_date_preset','today'); localStorage.setItem('ruth_panel_date_default_today_v18','1')} var dateStart=localStorage.getItem('ruth_panel_date_start')||''; var dateEnd=localStorage.getItem('ruth_panel_date_end')||''; var ordersPage=1; var allOrdersPage=1; var orderSearch=''; var productSearch='';
+  var storedDatePreset=localStorage.getItem('ruth_panel_date_preset'); var datePreset=storedDatePreset||'today'; if(!localStorage.getItem('ruth_panel_date_default_today_v18')){datePreset='today'; localStorage.setItem('ruth_panel_date_preset','today'); localStorage.setItem('ruth_panel_date_default_today_v18','1')} var dateStart=localStorage.getItem('ruth_panel_date_start')||''; var dateEnd=localStorage.getItem('ruth_panel_date_end')||''; var ordersPage=1; var allOrdersPage=1; var deliveredOrdersPage=1; var orderSearch=''; var productSearch='';
   var ISTANBUL_TZ='Europe/Istanbul'; var TR_OFFSET_MS=3*60*60*1000;
   function $(id){return document.getElementById(id)}
   function qsa(sel){return Array.prototype.slice.call(document.querySelectorAll(sel))}
@@ -2723,8 +2757,8 @@ function adminHtml(serverAdmin) {
     var top=$('topProducts'); if(top){ top.innerHTML=readyProducts.length?readyProducts.slice(0,5).map(function(p,i){return '<div class="rail-product">'+imgHtml(p.image,'')+'<div><div class="name">'+(i+1)+'. '+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+Number(p.quantity||0)+' adet • Kargoya hazır</div></div></div>'}).join(''):'<div class="empty">Kargoya hazır ürün bulunamadı.</div>'; }
     var el=$('productTotals'); if(el){ el.innerHTML=readyProducts.length?readyProducts.map(readyProductRow).join(''):'<div class="empty">Kargoya hazır olarak işaretlenmiş siparişlerde ürün yok.</div>'; }
     var list=$('ordersList'); if(list){ if(orders.length){var pg=pagedHtml(orders,ordersPage,10,'orders',orderCard); ordersPage=pg.page; list.innerHTML=pg.html;} else {list.innerHTML=(ikasSummary.ikasError?'<div class="empty">'+escapeHtml(ikasSummary.ikasError)+'</div>':'<div class="empty">Henüz canlı sipariş verisi bağlı değil.</div>');} }
-    var deliveredList=$('deliveredOrdersList'); if(deliveredList){ deliveredList.innerHTML=delivered.length?delivered.map(orderCard).join(''):'<div class="empty">Teslim edilen sipariş bulunamadı.</div>'; }
-    var allOrdersEl=$('ikasAllOrders'); if(allOrdersEl){ if(orders.length){var pg2=pagedHtml(orders,allOrdersPage,30,'allOrders',orderCard); allOrdersPage=pg2.page; allOrdersEl.innerHTML=pg2.html;} else {allOrdersEl.innerHTML='<div class="empty">Sipariş bulunamadı.</div>';} }
+    var deliveredList=$('deliveredOrdersList'); if(deliveredList){ if(delivered.length){var pgDel=pagedHtml(delivered,deliveredOrdersPage,5,'deliveredOrders',orderCard); deliveredOrdersPage=pgDel.page; deliveredList.innerHTML=pgDel.html;} else {deliveredList.innerHTML='<div class="empty">Teslim edilen sipariş bulunamadı.</div>';} }
+    var allOrdersEl=$('ikasAllOrders'); if(allOrdersEl){ if(orders.length){var pg2=pagedHtml(orders,allOrdersPage,5,'allOrders',orderCard); allOrdersPage=pg2.page; allOrdersEl.innerHTML=pg2.html;} else {allOrdersEl.innerHTML='<div class="empty">Sipariş bulunamadı.</div>';} }
     var readyOrdersEl=$('ikasReadyOrders'); if(readyOrdersEl){ readyOrdersEl.innerHTML=readyOrders.length?readyOrders.map(orderCard).join(''):'<div class="empty">Kargoya hazır sipariş bulunamadı.</div>'; }
     var readyProductsEl=$('ikasReadyProductTotals'); if(readyProductsEl){ readyProductsEl.innerHTML=readyProducts.length?readyProducts.map(readyProductRow).join(''):'<div class="empty">Hazırlanacak ürün toplamı yok.</div>'; }
     var productsEl=$('ikasAllProducts'); if(productsEl){ productsEl.innerHTML=allProducts.length?'<div class="product-grid">'+allProducts.map(productCard).join('')+'</div>':(ikasSummary.productError?'<div class="empty">Ürünler çekilemedi: '+escapeHtml(ikasSummary.productError)+'</div>':'<div class="empty">Ürün bulunamadı. Ürün API bağlantısı boş döndü.</div>'); }
@@ -2734,7 +2768,7 @@ function adminHtml(serverAdmin) {
   function formatDate(value){if(!value)return ''; try{return new Date(value).toLocaleString('tr-TR',{timeZone:ISTANBUL_TZ,day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}catch(e){return ''}}
     qsa('[data-order-search]').forEach(function(inp){inp.value=orderSearch; inp.addEventListener('input',function(){orderSearch=inp.value||''; ordersPage=1; allOrdersPage=1; qsa('[data-order-search]').forEach(function(other){if(other!==inp)other.value=orderSearch}); renderIkas()})});
   qsa('[data-product-search]').forEach(function(inp){inp.value=productSearch; inp.addEventListener('input',function(){productSearch=inp.value||''; qsa('[data-product-search]').forEach(function(other){if(other!==inp)other.value=productSearch}); renderIkas()})});
-  document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('[data-page-target]'); if(!b)return; var page=Number(b.getAttribute('data-page')||1); if(b.getAttribute('data-page-target')==='orders')ordersPage=page; if(b.getAttribute('data-page-target')==='allOrders')allOrdersPage=page; renderIkas();});
+  document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('[data-page-target]'); if(!b)return; var page=Number(b.getAttribute('data-page')||1); var target=b.getAttribute('data-page-target'); if(target==='orders')ordersPage=page; if(target==='allOrders')allOrdersPage=page; if(target==='deliveredOrders')deliveredOrdersPage=page; renderIkas();});
   if($('syncOrders'))$('syncOrders').addEventListener('click',function(){loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})}); if($('quickSync'))$('quickSync').addEventListener('click',function(){setRoute('ikas-orders',true);loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})}); qsa('.ikas-refresh').forEach(function(btn){btn.addEventListener('click',function(){loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})})});
   on('refreshSupport','click',function(){loadConversations(false)}); on('refreshCrm','click',function(){loadConversations(false)}); on('searchInput','input',renderConversations); on('crmSearch','input',renderCustomers);
   on('pushBtn','click',subscribePush);
