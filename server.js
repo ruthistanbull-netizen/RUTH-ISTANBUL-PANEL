@@ -225,17 +225,6 @@ async function handleAdminApi(req, res, url) {
     });
   }
 
-  if (req.method === "GET" && pathname === "/api/admin/ikas/summary") {
-    return sendJson(res, {
-      ok: true,
-      connected: Boolean(process.env.IKAS_API_TOKEN || process.env.IKAS_CLIENT_ID || process.env.IKAS_CLIENT_SECRET),
-      message: "ikas API bilgileri eklenince canlı sipariş verisi burada gösterilecek.",
-      totals: { orders: 0, units: 0, revenue: 0 },
-      productTotals: [],
-      orders: []
-    });
-  }
-
   if (req.method === "GET" && pathname === "/api/admin/conversations") {
     const items = await storage.listConversations();
     return sendJson(res, { ok: true, conversations: items.map(adminConversation) });
@@ -397,6 +386,17 @@ async function handleAdminApi(req, res, url) {
       tag: "ruth-test"
     });
     return sendJson(res, { ok: true });
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/ikas/summary") {
+    return sendJson(res, {
+      ok: true,
+      connected: false,
+      totals: { orders: 0, units: 0, revenue: 0 },
+      productTotals: [],
+      orders: [],
+      message: "ikas API bağlanınca siparişler ve ürün toplamları burada görünecek."
+    });
   }
 
   sendJson(res, { ok: false, error: "not_found" }, 404);
@@ -962,6 +962,214 @@ function adminHtml() {
 </script>
 </body>
 </html>`;
+}
+
+function requireAdmin(req, res) {
+  const header = String(req.headers.authorization || "");
+  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const payload = verifyToken(token);
+  if (!payload || payload.sub !== ADMIN_USER) {
+    sendJson(res, { ok: false, error: "unauthorized" }, 401);
+    return null;
+  }
+  return payload;
+}
+
+function signToken(payload) {
+  const body = base64url(JSON.stringify(payload));
+  const signature = crypto.createHmac("sha256", SESSION_SECRET).update(body).digest("base64url");
+  return `${body}.${signature}`;
+}
+
+function verifyToken(token) {
+  const [body, signature] = String(token || "").split(".");
+  if (!body || !signature) return null;
+  const expected = crypto.createHmac("sha256", SESSION_SECRET).update(body).digest("base64url");
+  if (!safeEqual(signature, expected)) return null;
+  try {
+    const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8"));
+    if (!payload.exp || payload.exp < Math.floor(Date.now() / 1000)) return null;
+    return payload;
+  } catch (error) {
+    return null;
+  }
+}
+
+function safeEqual(a, b) {
+  const left = Buffer.from(String(a));
+  const right = Buffer.from(String(b));
+  return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function readJson(req, limit = 1_000_000) {
+  return new Promise((resolve, reject) => {
+    let raw = "";
+    req.on("data", (chunk) => {
+      raw += chunk;
+      if (raw.length > limit) {
+        reject(new Error("body_too_large"));
+        req.destroy();
+      }
+    });
+    req.on("end", () => {
+      try {
+        resolve(raw ? JSON.parse(raw) : {});
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on("error", reject);
+  });
+}
+
+function sendJson(res, payload, status = 200) {
+  if (res.headersSent || res.writableEnded) return true;
+  res.writeHead(status, {
+    "Content-Type": "application/json; charset=utf-8",
+    "Cache-Control": "no-store"
+  });
+  res.end(JSON.stringify(payload));
+  return true;
+}
+
+function setCors(res) {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,PATCH,DELETE,OPTIONS");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+}
+
+function redirect(res, location) {
+  res.writeHead(302, { Location: location });
+  res.end();
+}
+
+function normalizeDb(db) {
+  return {
+    counters: { visitor: Number(db.counters && db.counters.visitor || 0) },
+    conversations: Array.isArray(db.conversations) ? db.conversations : [],
+    messages: Array.isArray(db.messages) ? db.messages : [],
+    pushSubscriptions: Array.isArray(db.pushSubscriptions) ? db.pushSubscriptions : [],
+    customerNotes: Array.isArray(db.customerNotes) ? db.customerNotes : []
+  };
+}
+
+function publicMessage(message) {
+  return {
+    id: message.id,
+    sender: message.sender,
+    body: message.body || "",
+    createdAt: message.createdAt
+  };
+}
+
+function adminMessage(message) {
+  return {
+    id: message.id,
+    conversationId: message.conversationId,
+    sender: message.sender,
+    body: message.body || "",
+    imageName: message.imageName || "",
+    imageMime: message.imageMime || "",
+    imageData: message.imageData || "",
+    createdAt: message.createdAt
+  };
+}
+
+function adminConversation(conversation) {
+  return {
+    id: conversation.id,
+    sessionId: conversation.sessionId,
+    visitorName: conversation.visitorName || "",
+    visitorLabel: conversation.visitorLabel || "Ziyaretçi",
+    visitorPhone: conversation.visitorPhone || "",
+    displayName: displayName(conversation),
+    pageUrl: conversation.pageUrl || "",
+    pageTitle: conversation.pageTitle || "",
+    status: conversation.status || "open",
+    unreadAdminCount: Number(conversation.unreadAdminCount || 0),
+    lastMessageText: conversation.lastMessageText || "",
+    lastCustomerMessageAt: conversation.lastCustomerMessageAt || "",
+    lastAdminMessageAt: conversation.lastAdminMessageAt || "",
+    createdAt: conversation.createdAt || "",
+    updatedAt: conversation.updatedAt || ""
+  };
+}
+
+function adminNote(note) {
+  return {
+    id: note.id,
+    conversationId: note.conversationId,
+    body: note.body || "",
+    reminderAt: note.reminderAt || "",
+    reminderSentAt: note.reminderSentAt || "",
+    completedAt: note.completedAt || "",
+    createdAt: note.createdAt || "",
+    updatedAt: note.updatedAt || ""
+  };
+}
+
+function adminReminder(note) {
+  return adminNote(note);
+}
+
+function displayName(conversation) {
+  return conversation.visitorName || conversation.visitorPhone || conversation.visitorLabel || "Ziyaretçi";
+}
+
+function guessVisitorName(text) {
+  const value = String(text || "").trim();
+  if (value.length < 2 || value.length > 60) return "";
+  if (/[?!.:,;@#0-9]/.test(value)) return "";
+  const normalized = normalizeText(value);
+  if (/(merhaba|selam|siparis|sipariş|urun|ürün|beden|stok|kargo|iade|degisim|değişim|fiyat|whatsapp|yardim|yardım)/.test(normalized)) return "";
+  if (!/^[a-zA-ZğüşöçıİĞÜŞÖÇ\s'-]+$/.test(value)) return "";
+  return value;
+}
+
+function guessPhone(text) {
+  const match = String(text || "").match(/(?:\+?90|0)?\s?5\d{2}[\s.-]?\d{3}[\s.-]?\d{2}[\s.-]?\d{2}/);
+  return match ? match[0].replace(/[^\d+]/g, "") : "";
+}
+
+function normalizeText(value) {
+  return String(value || "")
+    .toLocaleLowerCase("tr")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function sanitizeImage(image) {
+  if (!image || typeof image !== "object") return null;
+  const data = String(image.data || "");
+  if (!/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(data)) return null;
+  const bytes = Buffer.byteLength(data, "utf8");
+  if (bytes > MAX_IMAGE_BYTES) {
+    throw new Error("image_too_large");
+  }
+  return {
+    name: String(image.name || "fotoğraf").slice(0, 160),
+    mime: String(image.mime || "image/jpeg").slice(0, 80),
+    data
+  };
+}
+
+function normalizeReminderAt(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString();
+}
+
+function cleanSessionId(value) {
+  return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 120);
+}
+
+function createId(prefix) {
+  return `${prefix}_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
+}
+
+function base64url(value) {
+  return Buffer.from(String(value)).toString("base64url");
 }
 
 function trimSlash(value) {
