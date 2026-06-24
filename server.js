@@ -405,6 +405,11 @@ async function handleAdminApi(req, res, url) {
     return sendJson(res, { ok: true });
   }
 
+  if (req.method === "GET" && pathname === "/api/admin/ikas/debug") {
+    const debug = await buildIkasDebug();
+    return sendJson(res, debug);
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/ikas/summary") {
     try {
       const summary = await buildIkasSummary();
@@ -430,6 +435,151 @@ async function handleAdminApi(req, res, url) {
 
   sendJson(res, { ok: false, error: "not_found" }, 404);
 }
+
+async function buildIkasDebug() {
+  const startedAt = new Date().toISOString();
+  const result = {
+    ok: true,
+    checkedAt: startedAt,
+    env: {
+      IKAS_STORE_NAME: IKAS_STORE_NAME ? `${IKAS_STORE_NAME} (${IKAS_STORE_NAME.length} karakter)` : "EKSİK",
+      IKAS_CLIENT_ID: IKAS_CLIENT_ID ? `VAR (${IKAS_CLIENT_ID.length} karakter)` : "EKSİK",
+      IKAS_CLIENT_SECRET: IKAS_CLIENT_SECRET ? `VAR (${IKAS_CLIENT_SECRET.length} karakter)` : "EKSİK",
+      IKAS_GRAPHQL_URL: IKAS_GRAPHQL_URL || "EKSİK",
+      IKAS_TOKEN_URL: IKAS_TOKEN_URL || "EKSİK",
+      IKAS_STOREFRONT_URL: IKAS_STOREFRONT_URL || "EKSİK"
+    },
+    tests: []
+  };
+
+  if (!ikasConfigured()) {
+    result.ok = false;
+    result.status = "env_missing";
+    result.message = "Render Environment Variables içinde IKAS_STORE_NAME / IKAS_CLIENT_ID / IKAS_CLIENT_SECRET eksik.";
+    return result;
+  }
+
+  const tokenTest = await debugTokenRequest();
+  result.tests.push(tokenTest);
+  if (!tokenTest.ok) {
+    result.ok = false;
+    result.status = "token_failed";
+    result.message = "ikas token alınamadı. Store name, Client ID, Client Secret veya uygulama tipi/izinleri yanlış olabilir.";
+    return result;
+  }
+
+  const meTest = await debugGraphQL("me", `{ me { id } }`);
+  result.tests.push(meTest);
+
+  const schemaTest = await debugGraphQL("query_fields", `query { __schema { queryType { fields { name } } } }`, (data) => {
+    const fields = (((data || {}).__schema || {}).queryType || {}).fields || [];
+    const names = fields.map((f) => f && f.name).filter(Boolean);
+    return {
+      count: names.length,
+      orderFields: names.filter((name) => /order/i.test(name)).slice(0, 30),
+      productFields: names.filter((name) => /product/i.test(name)).slice(0, 30),
+      categoryFields: names.filter((name) => /categor|collection/i.test(name)).slice(0, 30)
+    };
+  });
+  result.tests.push(schemaTest);
+
+  const orderTests = [
+    ["listOrder_minimal", `query { listOrder { data { id orderNumber } } }`],
+    ["listOrder_paginated_minimal", `query { listOrder(pagination: { limit: 5, page: 1 }) { count hasNext data { id orderNumber } } }`],
+    ["listOrder_date_fields", `query { listOrder(pagination: { limit: 5, page: 1 }) { data { id orderNumber createdAt updatedAt orderDate orderedAt status orderPackageStatus orderPaymentStatus } } }`]
+  ];
+  for (const [label, query] of orderTests) result.tests.push(await debugGraphQL(label, query, summarizeFirstDataNode));
+
+  const productTests = [
+    ["listProduct_minimal", `query { listProduct { data { id name } } }`],
+    ["listProduct_paginated_minimal", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name } } }`],
+    ["listProduct_category_fields", `query { listProduct(pagination: { limit: 5, page: 1 }) { data { id name categoryIds } } }`],
+    ["listProduct_variant_safe", `query { listProduct(pagination: { limit: 5, page: 1 }) { data { id name variants { id sku barcode stock } } } }`]
+  ];
+  for (const [label, query] of productTests) result.tests.push(await debugGraphQL(label, query, summarizeFirstDataNode));
+
+  const categoryTests = [
+    ["listCategory_minimal", `query { listCategory { id name } }`],
+    ["listCategory_full_safe", `query { listCategory { id name parentId categoryPath imageId } }`]
+  ];
+  for (const [label, query] of categoryTests) result.tests.push(await debugGraphQL(label, query, summarizeFirstDataNode));
+
+  result.status = result.tests.some((test) => test.ok && /listOrder/.test(test.label) && Number(test.count || 0) > 0) || result.tests.some((test) => test.ok && /listProduct/.test(test.label) && Number(test.count || 0) > 0) ? "partial_or_ok" : "no_data_yet";
+  result.message = "Bu çıktıyı ChatGPT'ye at; hangi ikas alanının çalıştığını buna göre net sabitleyelim.";
+  return result;
+}
+
+async function debugTokenRequest() {
+  const body = new URLSearchParams();
+  body.set("grant_type", "client_credentials");
+  body.set("client_id", IKAS_CLIENT_ID);
+  body.set("client_secret", IKAS_CLIENT_SECRET);
+  try {
+    const response = await fetch(IKAS_TOKEN_URL, { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body });
+    const text = await response.text();
+    let data = {};
+    try { data = text ? JSON.parse(text) : {}; } catch (error) {}
+    return {
+      label: "token",
+      ok: response.ok && Boolean(data.access_token),
+      httpStatus: response.status,
+      tokenType: data.token_type || "",
+      expiresIn: data.expires_in || "",
+      responsePreview: sanitizeDebugText(text)
+    };
+  } catch (error) {
+    return { label: "token", ok: false, error: sanitizeDebugText(error && error.message ? error.message : String(error)) };
+  }
+}
+
+async function debugGraphQL(label, query, summarizer) {
+  try {
+    const token = await getIkasAccessToken();
+    const response = await fetch(IKAS_GRAPHQL_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ query })
+    });
+    const text = await response.text();
+    let json = {};
+    try { json = text ? JSON.parse(text) : {}; } catch (error) {}
+    const errors = Array.isArray(json.errors) ? json.errors.map((item) => ({ message: item && item.message || String(item), extensions: item && item.extensions || undefined })).slice(0, 5) : [];
+    const extra = summarizer && !errors.length ? summarizer(json.data || {}) : {};
+    return { label, ok: response.ok && !errors.length, httpStatus: response.status, errors, ...extra, responsePreview: errors.length ? sanitizeDebugText(text) : undefined };
+  } catch (error) {
+    return { label, ok: false, error: sanitizeDebugText(error && error.message ? error.message : String(error)) };
+  }
+}
+
+function summarizeFirstDataNode(data) {
+  const key = Object.keys(data || {})[0];
+  const node = key ? data[key] : null;
+  let rows = [];
+  let count = 0;
+  let hasNext = false;
+  if (Array.isArray(node)) { rows = node; count = node.length; }
+  else if (node && Array.isArray(node.data)) { rows = node.data; count = typeof node.count === "number" ? node.count : node.data.length; hasNext = Boolean(node.hasNext); }
+  return {
+    root: key || "",
+    count,
+    hasNext,
+    firstKeys: rows[0] ? Object.keys(rows[0]).slice(0, 30) : [],
+    firstRowPreview: rows[0] ? sanitizeDebugText(JSON.stringify(rows[0]).slice(0, 500)) : ""
+  };
+}
+
+function sanitizeDebugText(value) {
+  return String(value || "")
+    .replace(new RegExp(escapeRegExp(IKAS_CLIENT_SECRET), "g"), "[SECRET]")
+    .replace(new RegExp(escapeRegExp(IKAS_CLIENT_ID), "g"), "[CLIENT_ID]")
+    .replace(/eyJ[a-zA-Z0-9_\-.]+/g, "[TOKEN]")
+    .slice(0, 1200);
+}
+
+function escapeRegExp(value) {
+  return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 
 function ikasConfigured() {
   return Boolean(IKAS_STORE_NAME && IKAS_CLIENT_ID && IKAS_CLIENT_SECRET && IKAS_GRAPHQL_URL && IKAS_TOKEN_URL);
