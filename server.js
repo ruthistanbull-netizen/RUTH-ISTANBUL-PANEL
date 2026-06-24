@@ -444,9 +444,18 @@ async function handleAdminApi(req, res, url) {
 
   const replyMatch = pathname.match(/^\/api\/admin\/conversations\/([^/]+)\/reply$/);
   if (req.method === "POST" && replyMatch) {
-    const body = await readJson(req);
+    const body = await readJson(req, 12_000_000);
     const text = String(body.message || "").trim().slice(0, 2500);
-    if (!text) return sendJson(res, { ok: false, error: "empty_message" }, 400);
+    let image = null;
+    try {
+      image = sanitizeImage(body.image);
+    } catch (error) {
+      if (error && error.message === "image_too_large") {
+        return sendJson(res, { ok: false, error: "image_too_large", message: "Fotoğraf çok büyük. Daha küçük bir fotoğraf seç." }, 413);
+      }
+      throw error;
+    }
+    if (!text && !image) return sendJson(res, { ok: false, error: "empty_message" }, 400);
 
     let conversation = await storage.getConversation(replyMatch[1]);
     if (!conversation) return sendJson(res, { ok: false, error: "not_found" }, 404);
@@ -457,9 +466,9 @@ async function handleAdminApi(req, res, url) {
       sessionId: conversation.sessionId,
       sender: "admin",
       body: text,
-      imageName: "",
-      imageMime: "",
-      imageData: "",
+      imageName: image ? image.name : "",
+      imageMime: image ? image.mime : "",
+      imageData: image ? image.data : "",
       createdAt: now
     });
 
@@ -467,7 +476,7 @@ async function handleAdminApi(req, res, url) {
 
     conversation = await storage.updateConversation(conversation.id, {
       lastAdminMessageAt: now,
-      lastMessageText: text,
+      lastMessageText: text || (image ? "Fotoğraf gönderildi" : ""),
       unreadAdminCount: 0,
       updatedAt: now,
       status: "open"
@@ -3053,6 +3062,78 @@ function adminHtml(serverAdmin) {
   }
 }
 
+
+
+/* Admin live support photo send */
+.composer{
+  grid-template-columns:auto minmax(0,1fr) auto !important;
+  align-items:end !important;
+}
+.reply-stack{
+  display:grid;
+  gap:8px;
+  min-width:0;
+}
+.photo-send-btn{
+  min-height:44px;
+  white-space:nowrap;
+}
+.admin-photo-preview{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  background:rgba(255,255,255,.025);
+  padding:8px;
+  min-width:0;
+}
+.admin-photo-preview img{
+  width:46px;
+  height:46px;
+  border-radius:10px;
+  object-fit:cover;
+  border:1px solid var(--line-soft);
+  background:#08090b;
+  flex:0 0 auto;
+}
+.admin-photo-preview .photo-name{
+  min-width:0;
+  flex:1;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--text-2);
+  font-size:12px;
+}
+.admin-photo-preview .remove-photo{
+  flex:0 0 auto;
+  min-height:34px !important;
+  padding:7px 10px !important;
+}
+@media(max-width:820px){
+  .composer{
+    grid-template-columns:auto minmax(0,1fr) auto !important;
+    gap:8px !important;
+    padding:12px !important;
+  }
+  .photo-send-btn{
+    min-width:44px !important;
+    width:44px !important;
+    padding:0 !important;
+    font-size:0 !important;
+  }
+  .photo-send-btn:before{
+    content:"＋";
+    font-size:20px;
+    line-height:1;
+  }
+  .admin-photo-preview{
+    grid-column:1 / -1;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -3188,7 +3269,7 @@ function adminHtml(serverAdmin) {
 
         <div id="page-support" class="page">
           <div class="page-head"><div><div class="page-title">Canlı Destek</div><div class="page-sub">Siteden gelen konuşmaları buradan yanıtla.</div></div><button id="refreshSupport" class="btn">Yenile</button></div>
-          <div class="support-grid"><div class="panel"><div class="panel-head"><div class="panel-title">Konuşmalar</div><input id="searchInput" class="input" placeholder="Ara..." style="max-width:160px"></div><div id="conversationList" class="panel-body"><div class="empty">Yükleniyor...</div></div></div><div class="panel"><div class="panel-head"><div><div id="activeTitle" class="panel-title">Konuşma seç</div><div id="activeSub" class="preview">Müşteri mesajı burada açılır.</div></div><button id="closeConversation" class="btn ghost" disabled>Kapat</button></div><div id="messages" class="message-space"><div class="empty">Bir konuşma seç.</div></div><div class="mobile-chat-actions"><button id="mobileCloseConversation" class="btn ghost mobile-close-chat" type="button" disabled>Sohbeti Kapat</button></div><form id="replyForm" class="composer"><textarea id="replyText" class="textarea" placeholder="Yanıt yaz..." disabled></textarea><button id="sendReply" class="btn gold" disabled>Gönder</button></form></div><div class="panel"><div class="panel-head"><div class="panel-title">Müşteri Bilgisi</div></div><div class="panel-body"><div class="info-line"><span>Ad</span><b id="infoName">-</b></div><div class="info-line"><span>Telefon</span><b id="infoPhone">-</b></div><div class="info-line"><span>Son Mesaj</span><b id="infoLast">-</b></div><div class="info-line"><span>Sayfa</span><b id="infoPage">-</b></div><button class="btn gold full" data-route="crm">CRM Kaydına Git</button></div></div></div>
+          <div class="support-grid"><div class="panel"><div class="panel-head"><div class="panel-title">Konuşmalar</div><input id="searchInput" class="input" placeholder="Ara..." style="max-width:160px"></div><div id="conversationList" class="panel-body"><div class="empty">Yükleniyor...</div></div></div><div class="panel"><div class="panel-head"><div><div id="activeTitle" class="panel-title">Konuşma seç</div><div id="activeSub" class="preview">Müşteri mesajı burada açılır.</div></div><button id="closeConversation" class="btn ghost" disabled>Kapat</button></div><div id="messages" class="message-space"><div class="empty">Bir konuşma seç.</div></div><div class="mobile-chat-actions"><button id="mobileCloseConversation" class="btn ghost mobile-close-chat" type="button" disabled>Sohbeti Kapat</button></div><form id="replyForm" class="composer"><input id="adminPhotoInput" type="file" accept="image/*" class="hidden"><button id="adminPhotoBtn" class="btn ghost photo-send-btn" type="button" disabled>Fotoğraf</button><div class="reply-stack"><textarea id="replyText" class="textarea" placeholder="Yanıt yaz..." disabled></textarea><div id="adminPhotoPreview" class="admin-photo-preview hidden"></div></div><button id="sendReply" class="btn gold" disabled>Gönder</button></form></div><div class="panel"><div class="panel-head"><div class="panel-title">Müşteri Bilgisi</div></div><div class="panel-body"><div class="info-line"><span>Ad</span><b id="infoName">-</b></div><div class="info-line"><span>Telefon</span><b id="infoPhone">-</b></div><div class="info-line"><span>Son Mesaj</span><b id="infoLast">-</b></div><div class="info-line"><span>Sayfa</span><b id="infoPage">-</b></div><button class="btn gold full" data-route="crm">CRM Kaydına Git</button></div></div></div>
         </div>
 
         <div id="page-crm" class="page">
@@ -3232,7 +3313,7 @@ function adminHtml(serverAdmin) {
 <script>
 (function(){
   var token=localStorage.getItem('ruth_admin_token')||'';
-  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null;
+  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null; var selectedAdminImage=null;
   var storedDatePreset=localStorage.getItem('ruth_panel_date_preset'); var datePreset=storedDatePreset||'today'; if(!localStorage.getItem('ruth_panel_date_default_today_v18')){datePreset='today'; localStorage.setItem('ruth_panel_date_preset','today'); localStorage.setItem('ruth_panel_date_default_today_v18','1')} var dateStart=localStorage.getItem('ruth_panel_date_start')||''; var dateEnd=localStorage.getItem('ruth_panel_date_end')||''; var ordersPage=1; var allOrdersPage=1; var deliveredOrdersPage=1; var orderSearch=''; var productSearch='';
   var ISTANBUL_TZ='Europe/Istanbul'; var TR_OFFSET_MS=3*60*60*1000;
   function $(id){return document.getElementById(id)}
@@ -3288,8 +3369,34 @@ function adminHtml(serverAdmin) {
   function getActive(){return conversations.find(function(c){return c.id===activeId})||{}}
   function selectConversation(id,route){ if(activeId&&activeId!==id)sendTyping(false,activeId); activeId=id; renderConversations(); renderCustomers(); if(route)setRoute(route,true); if(route==='support')loadMessages(id); if(route==='crm')loadCrmDetail(id); }
   function fillInfo(c){setText('infoName',c.displayName||'-');setText('infoPhone',c.visitorPhone||'-');setText('infoLast',c.lastMessageText||'-');setText('infoPage',c.pageTitle||c.pageUrl||'-')}
+  function setAdminPhoto(image){
+    selectedAdminImage=image||null;
+    var preview=$('adminPhotoPreview');
+    if(!preview)return;
+    if(!selectedAdminImage){
+      preview.classList.add('hidden');
+      preview.innerHTML='';
+      if($('adminPhotoInput'))$('adminPhotoInput').value='';
+      return;
+    }
+    preview.classList.remove('hidden');
+    preview.innerHTML='<img src="'+escapeAttr(selectedAdminImage.data)+'" alt="Seçilen fotoğraf"><div class="photo-name">'+escapeHtml(selectedAdminImage.name||'Fotoğraf')+'</div><button type="button" class="btn ghost remove-photo" id="removeAdminPhoto">Sil</button>';
+    var remove=$('removeAdminPhoto');
+    if(remove)remove.addEventListener('click',function(){setAdminPhoto(null)});
+  }
+  function readAdminPhoto(file){
+    if(!file)return;
+    if(!new RegExp('^image/').test(file.type||'')){toast('Sadece fotoğraf seç.');return;}
+    if(file.size>6*1024*1024){toast('Fotoğraf büyük. 6 MB altında seç.');return;}
+    var reader=new FileReader();
+    reader.onload=function(){
+      setAdminPhoto({name:file.name||'fotoğraf',mime:file.type||'image/jpeg',data:String(reader.result||'')});
+    };
+    reader.onerror=function(){toast('Fotoğraf okunamadı')};
+    reader.readAsDataURL(file);
+  }
   function updateCloseConversationButtons(c){var closed=c&&c.status==='closed'; ['closeConversation','mobileCloseConversation'].forEach(function(id){var b=$(id); if(!b)return; b.disabled=!activeId; b.textContent=closed?'Yeniden Aç':'Sohbeti Kapat'; b.classList.toggle('is-closed',closed);});}
-  function loadMessages(id,silent){ var c=getActive(); if($('activeTitle'))$('activeTitle').innerHTML=escapeHtml(c.displayName||'Ziyaretçi')+' '+statusPill(c); setText('activeSub',(c.pageTitle||'')+(c.pageUrl?' • '+c.pageUrl:'')); fillInfo(c); $('replyText').disabled=false; $('sendReply').disabled=false; updateCloseConversationButtons(c); if(!silent)$('messages').innerHTML='<div class="empty">Mesajlar yükleniyor...</div>'; return api('/api/admin/conversations/'+encodeURIComponent(id)+'/messages').then(function(d){renderMessages(d.messages||[]); return api('/api/admin/conversations/'+encodeURIComponent(id)+'/read',{method:'POST'}).catch(function(){})}).catch(function(err){$('messages').innerHTML='<div class="empty">Mesajlar yüklenemedi: '+escapeHtml(err.message)+'</div>'}) }
+  function loadMessages(id,silent){ var c=getActive(); if($('activeTitle'))$('activeTitle').innerHTML=escapeHtml(c.displayName||'Ziyaretçi')+' '+statusPill(c); setText('activeSub',(c.pageTitle||'')+(c.pageUrl?' • '+c.pageUrl:'')); fillInfo(c); $('replyText').disabled=false; $('sendReply').disabled=false; if($('adminPhotoBtn'))$('adminPhotoBtn').disabled=false; updateCloseConversationButtons(c); if(!silent)$('messages').innerHTML='<div class="empty">Mesajlar yükleniyor...</div>'; return api('/api/admin/conversations/'+encodeURIComponent(id)+'/messages').then(function(d){renderMessages(d.messages||[]); return api('/api/admin/conversations/'+encodeURIComponent(id)+'/read',{method:'POST'}).catch(function(){})}).catch(function(err){$('messages').innerHTML='<div class="empty">Mesajlar yüklenemedi: '+escapeHtml(err.message)+'</div>'}) }
   function adminImageSrc(message){
     var raw = message && (message.imageData || message.image_data || message.imageUrl || '');
     if(!raw) return '';
@@ -3319,7 +3426,9 @@ function adminHtml(serverAdmin) {
     }).join('');
     el.scrollTop=el.scrollHeight;
   }
-  on('replyForm','submit',function(e){e.preventDefault(); var text=$('replyText').value.trim(); if(!activeId||!text)return; $('sendReply').disabled=true; sendTyping(false); api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/reply',{method:'POST',body:JSON.stringify({message:text})}).then(function(){ $('replyText').value=''; loadMessages(activeId); loadConversations(true); toast('Mesaj gönderildi')}).catch(function(err){alert('Mesaj gönderilemedi: '+err.message)}).finally(function(){$('sendReply').disabled=false})});
+  on('replyForm','submit',function(e){e.preventDefault(); var text=$('replyText').value.trim(); var image=selectedAdminImage; if(!activeId||(!text&&!image))return; $('sendReply').disabled=true; if($('adminPhotoBtn'))$('adminPhotoBtn').disabled=true; sendTyping(false); api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/reply',{method:'POST',body:JSON.stringify({message:text,image:image})}).then(function(){ $('replyText').value=''; setAdminPhoto(null); loadMessages(activeId); loadConversations(true); toast(image&&!text?'Fotoğraf gönderildi':'Mesaj gönderildi')}).catch(function(err){alert('Mesaj gönderilemedi: '+err.message)}).finally(function(){$('sendReply').disabled=false; if($('adminPhotoBtn'))$('adminPhotoBtn').disabled=!activeId;})});
+  on('adminPhotoBtn','click',function(){if(!activeId)return; var input=$('adminPhotoInput'); if(input)input.click();});
+  on('adminPhotoInput','change',function(){var file=this.files&&this.files[0]; readAdminPhoto(file);});
   on('replyText','input',function(){ if(!activeId)return; clearTimeout(typingTimer); clearTimeout(typingStop); typingTimer=setTimeout(function(){sendTyping(true)},100); typingStop=setTimeout(function(){sendTyping(false)},2500); });
   function sendTyping(isTyping,forced){var id=forced||activeId; if(!id||!token)return; if(isTyping&&typingFor===id)return; if(!isTyping&&!typingFor&&!forced)return; if(isTyping)typingFor=id; if(!isTyping&&(!forced||typingFor===id))typingFor=''; api('/api/admin/conversations/'+encodeURIComponent(id)+'/typing',{method:'POST',body:JSON.stringify({typing:!!isTyping})}).catch(function(){})}
   function toggleConversationClosed(){if(!activeId)return; var c=getActive(); var next=c.status==='closed'?'open':'closed'; ['closeConversation','mobileCloseConversation'].forEach(function(id){var b=$(id); if(b)b.disabled=true;}); api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/status',{method:'POST',body:JSON.stringify({status:next})}).then(function(){loadConversations(true);loadMessages(activeId,true);toast(next==='closed'?'Sohbet kapatıldı':'Sohbet yeniden açıldı')}).catch(function(err){alert('Sohbet durumu değiştirilemedi: '+err.message); updateCloseConversationButtons(c);});}
@@ -3673,6 +3782,9 @@ function publicMessage(message) {
     id: message.id,
     sender: message.sender,
     body: message.body || "",
+    imageName: message.imageName || "",
+    imageMime: message.imageMime || "",
+    imageData: message.imageData || "",
     createdAt: message.createdAt
   };
 }
