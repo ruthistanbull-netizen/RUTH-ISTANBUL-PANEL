@@ -295,9 +295,11 @@ async function handleLogin(req, res) {
   const username = String(body.username || "").trim();
   const password = String(body.password || "").trim();
   if (!isValidAdminUser(username, password)) {
+    console.log("Admin login failed:", username || "(empty)");
     return sendJson(res, { ok: false, error: "unauthorized" }, 401);
   }
 
+  console.log("Admin login success:", username);
   const token = signToken({ sub: username, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30 });
   sendJson(res, { ok: true, token, user: { username } });
 }
@@ -2445,6 +2447,7 @@ function adminHtml() {
   var ISTANBUL_TZ='Europe/Istanbul'; var TR_OFFSET_MS=3*60*60*1000;
   function $(id){return document.getElementById(id)}
   function qsa(sel){return Array.prototype.slice.call(document.querySelectorAll(sel))}
+  function on(id,event,fn){var el=$(id); if(el) el.addEventListener(event,fn); return el}
   function setText(id,val){var el=$(id); if(el) el.textContent=(val===undefined||val===null)?'':String(val)}
   function escapeHtml(v){return String(v||'').replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]})}
   function escapeAttr(v){return escapeHtml(v).replace(new RegExp(String.fromCharCode(96),'g'),'&#096;')}
@@ -2465,12 +2468,12 @@ function adminHtml() {
 
   function showApp(){ $('loginPage').classList.add('hidden'); $('app').classList.remove('hidden'); loadMe(); initDateFilters(); setRoute(routeFromPath(),false); loadAll(); }
   function logout(push){token=''; localStorage.removeItem('ruth_admin_token'); $('app').classList.add('hidden'); $('loginPage').classList.remove('hidden'); if(push!==false) history.replaceState(null,'','/admin/'); }
-  $('loginForm').addEventListener('submit',function(e){e.preventDefault(); setText('loginError',''); api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token||''; if(!token){throw new Error('token alınamadı')} localStorage.setItem('ruth_admin_token',token); showApp();}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message)})});
-  $('logoutBtn').addEventListener('click',function(){logout()});
-  $('collapseBtn').addEventListener('click',function(){ $('app').classList.toggle('nav-mini') });
-  $('deskMenuBtn').addEventListener('click',function(){ $('app').classList.toggle('nav-mini') });
-  $('mobileMenuBtn').addEventListener('click',function(){ $('app').classList.add('mobile-open') });
-  $('drawerShade').addEventListener('click',function(){ $('app').classList.remove('mobile-open') });
+  on('loginForm','submit',function(e){e.preventDefault(); setText('loginError',''); var btn=document.querySelector('#loginForm button[type="submit"]'); if(btn)btn.disabled=true; api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token||''; if(!token){throw new Error('token alınamadı')} localStorage.setItem('ruth_admin_token',token); location.href='/admin/';}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message); if(btn)btn.disabled=false;})});
+  on('logoutBtn','click',function(){logout()});
+  on('collapseBtn','click',function(){ $('app').classList.toggle('nav-mini') });
+  on('deskMenuBtn','click',function(){ $('app').classList.toggle('nav-mini') });
+  on('mobileMenuBtn','click',function(){ $('app').classList.add('mobile-open') });
+  on('drawerShade','click',function(){ $('app').classList.remove('mobile-open') });
   qsa('[data-route]').forEach(function(el){el.addEventListener('click',function(){setRoute(el.getAttribute('data-route'),true); $('app').classList.remove('mobile-open')})});
   window.addEventListener('popstate',function(){setRoute(routeFromPath(),false)});
   function routeFromPath(){var p=location.pathname||'/admin/'; if(p.indexOf('/admin/')===0){p=p.slice('/admin/'.length)} else if(p==='/admin'){p=''}; while(p.endsWith('/')) p=p.slice(0,-1); return p||'overview'}
@@ -2518,13 +2521,13 @@ function adminHtml() {
     }).join('');
     el.scrollTop=el.scrollHeight;
   }
-  $('replyForm').addEventListener('submit',function(e){e.preventDefault(); var text=$('replyText').value.trim(); if(!activeId||!text)return; $('sendReply').disabled=true; sendTyping(false); api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/reply',{method:'POST',body:JSON.stringify({message:text})}).then(function(){ $('replyText').value=''; loadMessages(activeId); loadConversations(true); toast('Mesaj gönderildi')}).catch(function(err){alert('Mesaj gönderilemedi: '+err.message)}).finally(function(){$('sendReply').disabled=false})});
-  $('replyText').addEventListener('input',function(){ if(!activeId)return; clearTimeout(typingTimer); clearTimeout(typingStop); typingTimer=setTimeout(function(){sendTyping(true)},100); typingStop=setTimeout(function(){sendTyping(false)},2500); });
+  on('replyForm','submit',function(e){e.preventDefault(); var text=$('replyText').value.trim(); if(!activeId||!text)return; $('sendReply').disabled=true; sendTyping(false); api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/reply',{method:'POST',body:JSON.stringify({message:text})}).then(function(){ $('replyText').value=''; loadMessages(activeId); loadConversations(true); toast('Mesaj gönderildi')}).catch(function(err){alert('Mesaj gönderilemedi: '+err.message)}).finally(function(){$('sendReply').disabled=false})});
+  on('replyText','input',function(){ if(!activeId)return; clearTimeout(typingTimer); clearTimeout(typingStop); typingTimer=setTimeout(function(){sendTyping(true)},100); typingStop=setTimeout(function(){sendTyping(false)},2500); });
   function sendTyping(isTyping,forced){var id=forced||activeId; if(!id||!token)return; if(isTyping&&typingFor===id)return; if(!isTyping&&!typingFor&&!forced)return; if(isTyping)typingFor=id; if(!isTyping&&(!forced||typingFor===id))typingFor=''; api('/api/admin/conversations/'+encodeURIComponent(id)+'/typing',{method:'POST',body:JSON.stringify({typing:!!isTyping})}).catch(function(){})}
-  $('closeConversation').addEventListener('click',function(){if(!activeId)return; var c=getActive(); var next=c.status==='closed'?'open':'closed'; api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/status',{method:'POST',body:JSON.stringify({status:next})}).then(function(){loadConversations(true);loadMessages(activeId,true);toast(next==='closed'?'Sohbet kapatıldı':'Sohbet yeniden açıldı')})});
+  on('closeConversation','click',function(){if(!activeId)return; var c=getActive(); var next=c.status==='closed'?'open':'closed'; api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/status',{method:'POST',body:JSON.stringify({status:next})}).then(function(){loadConversations(true);loadMessages(activeId,true);toast(next==='closed'?'Sohbet kapatıldı':'Sohbet yeniden açıldı')})});
   function loadCrmDetail(id,silent){var c=getActive(); setText('crmTitle',c.displayName||'Ziyaretçi'); setText('crmSub',c.pageTitle||c.pageUrl||'Müşteri kaydı'); setText('crmPhone',c.visitorPhone||'-'); setText('crmStatus',statusLabel(c)); setText('crmLast',c.lastMessageText||'-'); $('noteText').disabled=false; $('noteReminder').disabled=false; $('noteBtn').disabled=false; if(!silent)$('notesList').innerHTML='<div class="empty">Notlar yükleniyor...</div>'; return api('/api/admin/conversations/'+encodeURIComponent(id)+'/messages').then(function(d){renderNotes(d.notes||[])}).catch(function(err){$('notesList').innerHTML='<div class="empty">CRM yüklenemedi: '+escapeHtml(err.message)+'</div>'})}
   function renderNotes(notes){var el=$('notesList'); if(!notes.length){el.innerHTML='<div class="empty">Bu müşteri için henüz özel not yok.</div>';return;} el.innerHTML=notes.map(function(n){return '<div class="note '+(n.completedAt?'done':'')+'"><div class="row"><div class="note-body">'+escapeHtml(n.body)+'</div><button class="btn ghost note-done" data-id="'+escapeHtml(n.id)+'" data-done="'+(n.completedAt?'1':'0')+'">'+(n.completedAt?'Geri Al':'Tamamla')+'</button></div><div class="note-meta">Hatırlatma: '+escapeHtml(n.reminderAt?fmtDate(n.reminderAt):'Yok')+' • Oluşturuldu: '+fmtDate(n.createdAt)+'</div></div>'}).join(''); qsa('.note-done').forEach(function(b){b.addEventListener('click',function(){api('/api/admin/notes/'+encodeURIComponent(b.getAttribute('data-id')),{method:'PATCH',body:JSON.stringify({completed:b.getAttribute('data-done')!=='1'})}).then(function(){loadCrmDetail(activeId);loadReminders()})})})}
-  $('noteForm').addEventListener('submit',function(e){e.preventDefault(); if(!activeId)return; var text=$('noteText').value.trim(); if(!text)return; $('noteBtn').disabled=true; api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/notes',{method:'POST',body:JSON.stringify({note:text,reminderAt:$('noteReminder').value||''})}).then(function(){$('noteText').value='';$('noteReminder').value='';loadCrmDetail(activeId);loadReminders();toast('Müşteri notu eklendi')}).catch(function(err){alert('Not eklenemedi: '+err.message)}).finally(function(){$('noteBtn').disabled=false})});
+  on('noteForm','submit',function(e){e.preventDefault(); if(!activeId)return; var text=$('noteText').value.trim(); if(!text)return; $('noteBtn').disabled=true; api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/notes',{method:'POST',body:JSON.stringify({note:text,reminderAt:$('noteReminder').value||''})}).then(function(){$('noteText').value='';$('noteReminder').value='';loadCrmDetail(activeId);loadReminders();toast('Müşteri notu eklendi')}).catch(function(err){alert('Not eklenemedi: '+err.message)}).finally(function(){$('noteBtn').disabled=false})});
   function imgHtml(src, cls){return '<div class="prod-img '+(cls||'')+'">'+(src?'<img src="'+escapeHtml(src)+'" alt="" loading="lazy">':'◇')+'</div>'}
   function orderProductsHtml(o){var items=o.items||[]; if(!items.length)return '<div class="empty">Ürün yok</div>'; return '<div class="order-products">'+items.map(function(i){return '<div class="order-product">'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+escapeHtml(i.status||'')+'</div></div><div class="badge">× '+Number(i.quantity||0)+'</div></div>'}).join('')+'</div>'}
   function orderCard(o){var amount=(o.currency||'₺')+' '+Number(o.total||0).toLocaleString('tr-TR'); return '<div class="order-card"><div class="row"><div><div class="name">'+escapeHtml(o.number||'Sipariş')+' — '+escapeHtml(o.customer||'')+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.status||'Durum yok')+' • '+escapeHtml(o.paymentStatus||'')+' • '+amount+'</div></div><span class="badge">'+escapeHtml(o.packageStatus||o.status||'Yeni')+'</span></div>'+orderProductsHtml(o)+'</div>'}
@@ -2567,11 +2570,15 @@ function adminHtml() {
   qsa('[data-product-search]').forEach(function(inp){inp.value=productSearch; inp.addEventListener('input',function(){productSearch=inp.value||''; qsa('[data-product-search]').forEach(function(other){if(other!==inp)other.value=productSearch}); renderIkas()})});
   document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('[data-page-target]'); if(!b)return; var page=Number(b.getAttribute('data-page')||1); if(b.getAttribute('data-page-target')==='orders')ordersPage=page; if(b.getAttribute('data-page-target')==='allOrders')allOrdersPage=page; renderIkas();});
   if($('syncOrders'))$('syncOrders').addEventListener('click',function(){loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})}); if($('quickSync'))$('quickSync').addEventListener('click',function(){setRoute('ikas-orders',true);loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})}); qsa('.ikas-refresh').forEach(function(btn){btn.addEventListener('click',function(){loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})})});
-  $('refreshSupport').addEventListener('click',function(){loadConversations(false)}); $('refreshCrm').addEventListener('click',function(){loadConversations(false)}); $('searchInput').addEventListener('input',renderConversations); $('crmSearch').addEventListener('input',renderCustomers);
-  $('pushBtn').addEventListener('click',subscribePush);
+  on('refreshSupport','click',function(){loadConversations(false)}); on('refreshCrm','click',function(){loadConversations(false)}); on('searchInput','input',renderConversations); on('crmSearch','input',renderCustomers);
+  on('pushBtn','click',subscribePush);
   function subscribePush(){ if(!('serviceWorker' in navigator)||!('PushManager' in window)){alert('Bu tarayıcı bildirim desteklemiyor.');return;} api('/api/admin/me').then(function(me){if(!me.vapidPublicKey)throw new Error('VAPID key yok'); return navigator.serviceWorker.register('/sw.js').then(function(reg){return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)})})}).then(function(sub){return api('/api/admin/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub})})}).then(function(){toast('Bildirimler açıldı')}).catch(function(err){alert('Bildirim açılamadı: '+err.message)})}
   function urlBase64ToUint8Array(base64String){var padding='='.repeat((4-base64String.length%4)%4); var base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/'); var raw=atob(base64); var arr=new Uint8Array(raw.length); for(var i=0;i<raw.length;++i)arr[i]=raw.charCodeAt(i); return arr}
-  if(token){showApp()} else {$('loginPage').classList.remove('hidden')}
+  if(token){
+    api('/api/admin/me').then(function(){showApp()}).catch(function(){token=''; localStorage.removeItem('ruth_admin_token'); $('loginPage').classList.remove('hidden');});
+  } else {
+    $('loginPage').classList.remove('hidden');
+  }
 })();
 </script>
 </body>
