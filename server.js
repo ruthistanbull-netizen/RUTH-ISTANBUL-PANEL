@@ -27,7 +27,10 @@ const IKAS_CLIENT_ID = String(process.env.IKAS_CLIENT_ID || "").trim();
 const IKAS_CLIENT_SECRET = String(process.env.IKAS_CLIENT_SECRET || "").trim();
 const IKAS_GRAPHQL_URL = String(process.env.IKAS_GRAPHQL_URL || "https://api.myikas.com/api/v1/admin/graphql").trim();
 const IKAS_TOKEN_URL = IKAS_STORE_NAME ? `https://${IKAS_STORE_NAME}.myikas.com/api/admin/oauth/token` : "";
+const IKAS_STOREFRONT_URL = normalizeStorefrontUrl(process.env.IKAS_STOREFRONT_URL || process.env.RUTH_SITE_URL || "https://ruthistanbul.com");
+const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_FETCH_STOREFRONT_IMAGES || "1") !== "0";
 let ikasTokenCache = { token: "", expiresAt: 0 };
+let storefrontImageCache = { expiresAt: 0, bySlug: new Map(), byName: new Map(), urls: [] };
 const MAX_IMAGE_BYTES = Number(process.env.RUTH_MAX_IMAGE_BYTES || 2_500_000);
 const ADMIN_NOTIFICATION_TITLE = "RUTH ISTANBUL";
 
@@ -624,6 +627,25 @@ async function fetchIkasProducts(categories = []) {
   // Bu yüzden ürün sorgusunu en güvenli alanlardan başlayarak fallback'li çalıştırıyoruz.
   const attempts = [
     {
+      label: "ikas products with slug",
+      fields: `
+        id
+        name
+        slug
+        createdAt
+        updatedAt
+        totalStock
+        categoryIds
+        variants {
+          id
+          sku
+          barcodeList
+          slug
+          variantValues { variantTypeName variantValueName }
+        }
+      `
+    },
+    {
       label: "ikas products safe",
       fields: `
         id
@@ -703,6 +725,7 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
         mainImageId,
         image: buildIkasImageUrl(mainImageId),
         productId: valueOrEmpty(variant.productId) || valueOrEmpty(product.id),
+        slug: valueOrEmpty(variant.slug),
         variantText
       };
     }) : [];
@@ -718,6 +741,7 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
     return {
       id: valueOrEmpty(product.id),
       name: valueOrEmpty(product.name) || "Ürün",
+      slug: valueOrEmpty(product.slug),
       image,
       mainImageId,
       totalStock: Number(product.totalStock || 0),
@@ -829,6 +853,8 @@ async function buildIkasSummary() {
     products = [];
   }
 
+  products = mergeOrderImagesIntoProducts(products, orders);
+  await enrichIkasImagesFromStorefront(orders, products, categories);
   products = mergeOrderImagesIntoProducts(products, orders);
   const collections = buildCollectionsFromProducts(products, categories);
   const readyOrders = orders.filter(isReadyOrder).sort(orderNewestFirst);
@@ -980,6 +1006,268 @@ function buildIkasImageUrl(mainImageId) {
   const base = String(process.env.IKAS_IMAGE_BASE_URL || "").trim().replace(/\/+$/, "");
   if (base) return `${base}/${encodeURIComponent(id)}`;
   return "";
+}
+
+async function enrichIkasImagesFromStorefront(orders, products, categories) {
+  if (!IKAS_FETCH_STOREFRONT_IMAGES || !IKAS_STOREFRONT_URL) return;
+  let imageMap = null;
+  try {
+    imageMap = await getStorefrontImageMap();
+  } catch (error) {
+    console.error("storefront image map error:", error && error.message ? error.message : error);
+    return;
+  }
+  if (!imageMap || (!imageMap.bySlug.size && !imageMap.byName.size)) return;
+
+  const resolve = (item) => {
+    if (!item || item.image) return item && item.image || "";
+    const candidates = [];
+    [item.slug, item.productSlug, item.handle].forEach((value) => { if (value) candidates.push(String(value)); });
+    [item.name, item.baseName].forEach((value) => { if (value) candidates.push(slugifyForUrl(value)); });
+    for (const candidate of candidates) {
+      const key = normalizeSlug(candidate);
+      if (key && imageMap.bySlug.has(key)) return imageMap.bySlug.get(key).image || "";
+    }
+    const nameKeys = [item.baseName, item.name].map(normalizeLookupText).filter(Boolean);
+    for (const key of nameKeys) {
+      if (imageMap.byName.has(key)) return imageMap.byName.get(key).image || "";
+    }
+    return "";
+  };
+
+  (orders || []).forEach((order) => {
+    (order.items || []).forEach((item) => {
+      const image = resolve(item);
+      if (image) item.image = image;
+    });
+  });
+
+  (products || []).forEach((product) => {
+    const image = resolve(product);
+    if (image) product.image = image;
+    (product.variants || []).forEach((variant) => {
+      const variantImage = resolve({ ...variant, name: product.name, baseName: product.name, productSlug: product.slug });
+      if (variantImage) variant.image = variantImage;
+    });
+    if (!product.image) product.image = (product.variants || []).find((variant) => variant.image)?.image || "";
+  });
+
+  (categories || []).forEach((category) => {
+    if (category.image) return;
+    const key = normalizeLookupText(category.name);
+    if (key && imageMap.byName.has(key)) category.image = imageMap.byName.get(key).image || "";
+  });
+}
+
+async function getStorefrontImageMap() {
+  const now = Date.now();
+  if (storefrontImageCache.expiresAt > now) return storefrontImageCache;
+  const bySlug = new Map();
+  const byName = new Map();
+  const urls = await discoverStorefrontProductUrls();
+  const limited = urls.slice(0, Number(process.env.IKAS_STOREFRONT_IMAGE_LIMIT || 900));
+  const concurrency = Math.max(1, Math.min(8, Number(process.env.IKAS_STOREFRONT_IMAGE_CONCURRENCY || 5)));
+  let index = 0;
+  async function worker() {
+    while (index < limited.length) {
+      const url = limited[index++];
+      try {
+        const info = await fetchStorefrontProductImage(url);
+        if (!info || !info.image) continue;
+        if (info.slug) bySlug.set(normalizeSlug(info.slug), info);
+        if (info.title) byName.set(normalizeLookupText(info.title), info);
+      } catch (error) {}
+    }
+  }
+  await Promise.all(Array.from({ length: concurrency }, worker));
+  storefrontImageCache = { expiresAt: now + 30 * 60 * 1000, bySlug, byName, urls: limited };
+  return storefrontImageCache;
+}
+
+async function discoverStorefrontProductUrls() {
+  const sitemapUrls = [new URL("/sitemap.xml", IKAS_STOREFRONT_URL).toString()];
+  const seenSitemaps = new Set();
+  const productUrls = new Set();
+
+  for (let i = 0; i < sitemapUrls.length && i < 20; i += 1) {
+    const sitemapUrl = sitemapUrls[i];
+    if (seenSitemaps.has(sitemapUrl)) continue;
+    seenSitemaps.add(sitemapUrl);
+    let xml = "";
+    try { xml = await fetchText(sitemapUrl); } catch (error) { continue; }
+    const locs = [...xml.matchAll(/<loc>\s*([^<]+?)\s*<\/loc>/gi)].map((m) => decodeHtmlEntity(m[1].trim()));
+    locs.forEach((loc) => {
+      if (/\.xml(\?|$)/i.test(loc) && sitemapUrls.length < 20) sitemapUrls.push(loc);
+      else if (isLikelyProductUrl(loc)) productUrls.add(stripQueryHash(loc));
+    });
+  }
+
+  if (!productUrls.size) {
+    // Bazı ikas temalarında sitemap ürün URL'lerini gizleyebiliyor. Yine de ana sayfadan yakalamayı deneriz.
+    try {
+      const html = await fetchText(IKAS_STOREFRONT_URL);
+      extractProductUrlsFromHtml(html, IKAS_STOREFRONT_URL).forEach((url) => productUrls.add(url));
+    } catch (error) {}
+  }
+
+  return [...productUrls];
+}
+
+function isLikelyProductUrl(url) {
+  const text = String(url || "");
+  return /\/(products|product|urun|ürün)\//i.test(text);
+}
+
+function extractProductUrlsFromHtml(html, baseUrl) {
+  const urls = new Set();
+  const re = /href=["']([^"']+)["']/gi;
+  let match;
+  while ((match = re.exec(String(html || "")))) {
+    try {
+      const absolute = new URL(match[1], baseUrl).toString();
+      if (isLikelyProductUrl(absolute)) urls.add(stripQueryHash(absolute));
+    } catch (error) {}
+  }
+  return [...urls];
+}
+
+async function fetchStorefrontProductImage(url) {
+  const html = await fetchText(url);
+  const image = absolutizeUrl(
+    pickMeta(html, "og:image") ||
+    pickMeta(html, "twitter:image") ||
+    pickJsonLdImage(html) ||
+    "",
+    url
+  );
+  const title = cleanStorefrontTitle(
+    pickMeta(html, "og:title") ||
+    pickMeta(html, "twitter:title") ||
+    pickTitle(html) ||
+    ""
+  );
+  const slug = getSlugFromUrl(url);
+  return { url, slug, title, image };
+}
+
+async function fetchText(url) {
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 RuthIstanbulPanel/1.0",
+      "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    }
+  });
+  if (!response.ok) throw new Error(`fetch ${response.status} ${url}`);
+  return response.text();
+}
+
+function pickMeta(html, property) {
+  const safe = property.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const patterns = [
+    new RegExp(`<meta[^>]+(?:property|name)=["']${safe}["'][^>]+content=["']([^"']+)["'][^>]*>`, "i"),
+    new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]+(?:property|name)=["']${safe}["'][^>]*>`, "i")
+  ];
+  for (const pattern of patterns) {
+    const match = String(html || "").match(pattern);
+    if (match && match[1]) return decodeHtmlEntity(match[1]);
+  }
+  return "";
+}
+
+function pickTitle(html) {
+  const match = String(html || "").match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  return match ? decodeHtmlEntity(match[1].replace(/\s+/g, " ").trim()) : "";
+}
+
+function pickJsonLdImage(html) {
+  const scripts = [...String(html || "").matchAll(/<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi)];
+  for (const script of scripts) {
+    try {
+      const data = JSON.parse(script[1].trim());
+      const found = findImageInJsonLd(data);
+      if (found) return found;
+    } catch (error) {}
+  }
+  return "";
+}
+
+function findImageInJsonLd(value) {
+  if (!value) return "";
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findImageInJsonLd(item);
+      if (found) return found;
+    }
+  }
+  if (typeof value === "object") {
+    if (value["@type"] && String(value["@type"]).toLowerCase().includes("product") && value.image) {
+      if (Array.isArray(value.image)) return String(value.image[0] || "");
+      if (typeof value.image === "object") return String(value.image.url || value.image.contentUrl || "");
+      return String(value.image || "");
+    }
+    for (const key of Object.keys(value)) {
+      const found = findImageInJsonLd(value[key]);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+
+function cleanStorefrontTitle(title) {
+  return String(title || "").replace(/\s*[|•-]\s*RUTH\s*ISTANBUL.*$/i, "").replace(/\s*[|•-]\s*Ruth.*$/i, "").trim();
+}
+
+function absolutizeUrl(url, baseUrl) {
+  const raw = String(url || "").trim();
+  if (!raw) return "";
+  try { return new URL(raw, baseUrl).toString(); } catch (error) { return raw; }
+}
+
+function stripQueryHash(url) {
+  try { const u = new URL(url); u.hash = ""; u.search = ""; return u.toString(); } catch (error) { return String(url || ""); }
+}
+
+function getSlugFromUrl(url) {
+  try {
+    const parts = new URL(url).pathname.split("/").filter(Boolean);
+    return parts[parts.length - 1] || "";
+  } catch (error) {
+    return "";
+  }
+}
+
+function normalizeSlug(value) {
+  return slugifyForUrl(String(value || "").replace(/^\/+|\/+$/g, ""));
+}
+
+function slugifyForUrl(value) {
+  return String(value || "")
+    .toLocaleLowerCase("tr")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/ğ/g, "g").replace(/ü/g, "u").replace(/ş/g, "s").replace(/ı/g, "i").replace(/ö/g, "o").replace(/ç/g, "c")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+}
+
+function normalizeLookupText(value) {
+  return slugifyForUrl(String(value || "").replace(/—.*$/g, "").replace(/\s+-\s+.*$/g, ""));
+}
+
+function normalizeStorefrontUrl(value) {
+  const raw = String(value || "").trim().replace(/\/+$/, "");
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `https://${raw}`;
+}
+
+function decodeHtmlEntity(value) {
+  return String(value || "")
+    .replace(/&amp;/g, "&")
+    .replace(/&quot;/g, '"')
+    .replace(/&#039;/g, "'")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">");
 }
 
 function buildReadyProductTotals(readyOrders) {
