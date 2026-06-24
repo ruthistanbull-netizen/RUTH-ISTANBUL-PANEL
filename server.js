@@ -3186,6 +3186,23 @@ function adminHtml(serverAdmin) {
   }
 }
 
+
+
+/* Single top menu button fix */
+.unified-menu-btn{
+  display:inline-grid !important;
+  place-items:center !important;
+  flex:0 0 auto !important;
+}
+#deskMenuBtn{
+  display:none !important;
+}
+@media(max-width:820px){
+  .unified-menu-btn{
+    display:inline-grid !important;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -3286,7 +3303,7 @@ function adminHtml(serverAdmin) {
 
     <main class="main">
       <header class="topbar">
-        <div class="top-left"><button id="mobileMenuBtn" class="icon-btn mobile-menu">☰</button><button id="deskMenuBtn" class="icon-btn">☰</button><div class="crumb-title" id="crumbTitle">Genel Bakış</div></div>
+        <div class="top-left"><button id="mobileMenuBtn" class="icon-btn unified-menu-btn">☰</button><div class="crumb-title" id="crumbTitle">Genel Bakış</div></div>
         <div class="top-actions"><button class="top-icon" title="Ara">⌕</button><button id="pushBtn" class="top-icon" title="Bildirimleri aç">♧<span id="topBadge" class="top-dot">0</span></button><div class="profile"><div class="avatar" title="Ruth Istanbul"><img class="ruth-logo-img ruth-avatar-img" src="/ruth-gold-r-logo.png" alt="Ruth Istanbul"></div><div class="profile-copy"><div id="profileName" class="profile-name">Yönetici</div><div class="profile-role">Yönetici</div></div></div></div>
       </header>
       <section class="content">
@@ -3394,8 +3411,7 @@ function adminHtml(serverAdmin) {
   on('loginForm','submit',function(e){e.preventDefault(); setText('loginError',''); var btn=document.querySelector('#loginForm button[type="submit"]'); if(btn)btn.disabled=true; api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token||''; if(!token){throw new Error('token alınamadı')} localStorage.setItem('ruth_admin_token',token); sessionStorage.setItem('ruth_admin_force_open','1'); location.reload();}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message); if(btn)btn.disabled=false;})});
   on('logoutBtn','click',function(){logout()});
   on('collapseBtn','click',function(){ $('app').classList.toggle('nav-mini') });
-  on('deskMenuBtn','click',function(){ $('app').classList.toggle('nav-mini') });
-  on('mobileMenuBtn','click',function(){ $('app').classList.add('mobile-open') });
+  on('mobileMenuBtn','click',function(){ if(window.matchMedia&&window.matchMedia('(max-width:820px)').matches){ $('app').classList.add('mobile-open') } else { $('app').classList.toggle('nav-mini') } });
   on('drawerShade','click',function(){ $('app').classList.remove('mobile-open') });
   function goRouteFromElement(el,event){ if(!el)return; var route=el.getAttribute('data-route'); if(!route)return; if(event){event.preventDefault(); event.stopPropagation();} setRoute(route,true); $('app').classList.remove('mobile-open'); }
   document.addEventListener('click',function(e){var el=e.target&&e.target.closest?e.target.closest('[data-route]'):null; if(el && $('app') && $('app').contains(el)) goRouteFromElement(el,e);},true);
