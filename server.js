@@ -2634,6 +2634,87 @@ function adminHtml() {
   }
 })();
 </script>
+
+  <script>
+    (function(){
+      function safeLoginNow(){
+        var userEl = document.getElementById('loginUser');
+        var passEl = document.getElementById('loginPass');
+        var errEl = document.getElementById('loginError');
+        var btn = document.querySelector('#loginForm button[type="submit"]');
+        if(errEl) errEl.textContent = '';
+        if(btn) btn.disabled = true;
+
+        fetch('/api/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: (userEl && userEl.value || '').trim(),
+            password: passEl && passEl.value || ''
+          })
+        })
+        .then(function(r){
+          return r.text().then(function(t){
+            var data = {};
+            try { data = t ? JSON.parse(t) : {}; } catch(e) {}
+            if(!r.ok) throw new Error(data.error || data.message || 'Giriş başarısız');
+            return data;
+          });
+        })
+        .then(function(data){
+          if(!data.token) throw new Error('token alınamadı');
+          localStorage.setItem('ruth_admin_token', data.token);
+
+          var login = document.getElementById('loginPage');
+          var app = document.getElementById('app');
+          if(login) login.classList.add('hidden');
+          if(app) app.classList.remove('hidden');
+
+          if(typeof window.ruthPanelBoot === 'function') {
+            window.ruthPanelBoot();
+          } else {
+            setTimeout(function(){ location.reload(); }, 120);
+          }
+        })
+        .catch(function(err){
+          if(errEl) errEl.textContent = 'Giriş başarısız: ' + (err && err.message ? err.message : err);
+          if(btn) btn.disabled = false;
+        });
+      }
+
+      function bindHardLogin(){
+        var form = document.getElementById('loginForm');
+        var btn = form && form.querySelector('button[type="submit"]');
+        if(form && form.dataset.ruthHardLogin !== '1'){
+          form.dataset.ruthHardLogin = '1';
+          form.onsubmit = function(e){
+            if(e){ e.preventDefault(); e.stopPropagation(); }
+            safeLoginNow();
+            return false;
+          };
+        }
+        if(btn && btn.dataset.ruthHardLogin !== '1'){
+          btn.dataset.ruthHardLogin = '1';
+          btn.type = 'button';
+          btn.onclick = function(e){
+            if(e){ e.preventDefault(); e.stopPropagation(); }
+            safeLoginNow();
+            return false;
+          };
+        }
+        window.ruthDirectLogin = safeLoginNow;
+      }
+
+      if(document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bindHardLogin);
+      } else {
+        bindHardLogin();
+      }
+      setTimeout(bindHardLogin, 500);
+      setTimeout(bindHardLogin, 1500);
+    })();
+  </script>
+
 </body>
 </html>`;
 }
