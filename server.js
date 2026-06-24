@@ -108,9 +108,11 @@ async function handleCustomerMessage(req, res) {
   const image = sanitizeImage(body.image);
   const pageUrl = String(body.pageUrl || "").slice(0, 1000);
   const pageTitle = String(body.pageTitle || "").slice(0, 300);
-  const hintedName = String(body.visitorName || "").trim().slice(0, 80);
+  const customerInfo = normalizeCustomerInfo(body.customerInfo || {});
+  const hintedName = String(customerInfo.fullName || body.visitorName || "").trim().slice(0, 80);
   const guessedName = hintedName || guessVisitorName(text);
-  const guessedPhone = guessPhone(text);
+  const guessedPhone = customerInfo.phone || guessPhone(text);
+  const customerMetaLine = buildCustomerMetaLine(customerInfo, guessedPhone);
 
   if (!text && !image) {
     return sendJson(res, {
@@ -120,12 +122,13 @@ async function handleCustomerMessage(req, res) {
   }
 
   let conversation = await storage.getConversationBySessionId(sessionId);
+  const visitorLabel = customerInfo.type === "member" ? "Üye müşteri" : "Misafir müşteri";
   if (!conversation) {
     conversation = await storage.createConversation({
       sessionId,
       visitorName: guessedName,
-      visitorPhone: guessedPhone,
-      visitorLabel: await storage.nextVisitorLabel(sessionId),
+      visitorPhone: customerMetaLine || guessedPhone,
+      visitorLabel,
       pageUrl,
       pageTitle,
       status: "open",
@@ -148,8 +151,10 @@ async function handleCustomerMessage(req, res) {
     unreadAdminCount: Number(conversation.unreadAdminCount || 0) + 1
   };
 
-  if (guessedName && !conversation.visitorName) patch.visitorName = guessedName;
-  if (guessedPhone && !conversation.visitorPhone) patch.visitorPhone = guessedPhone;
+  if (guessedName && conversation.visitorName !== guessedName) patch.visitorName = guessedName;
+  if (customerMetaLine && conversation.visitorPhone !== customerMetaLine) patch.visitorPhone = customerMetaLine;
+  else if (guessedPhone && !conversation.visitorPhone) patch.visitorPhone = guessedPhone;
+  if (conversation.visitorLabel !== visitorLabel) patch.visitorLabel = visitorLabel;
 
   conversation = await storage.updateConversation(conversation.id, patch);
 
@@ -1545,6 +1550,7 @@ function adminConversation(conversation) {
     visitorName: conversation.visitorName || "",
     visitorLabel: conversation.visitorLabel || "Ziyaretçi",
     visitorPhone: conversation.visitorPhone || "",
+    customerType: String(conversation.visitorPhone || "").startsWith("Üye") ? "Üye" : (String(conversation.visitorPhone || "").startsWith("Misafir") ? "Misafir" : ""),
     displayName: displayName(conversation),
     pageUrl: conversation.pageUrl || "",
     pageTitle: conversation.pageTitle || "",
@@ -1577,6 +1583,35 @@ function adminReminder(note) {
 
 function displayName(conversation) {
   return conversation.visitorName || conversation.visitorPhone || conversation.visitorLabel || "Ziyaretçi";
+}
+
+
+function normalizeCustomerInfo(input) {
+  const raw = input && typeof input === "object" ? input : {};
+  const type = raw.type === "member" ? "member" : "guest";
+  const firstName = String(raw.firstName || "").trim().slice(0, 80);
+  const lastName = String(raw.lastName || "").trim().slice(0, 80);
+  const fullName = String(raw.fullName || [firstName, lastName].filter(Boolean).join(" ") || "").trim().replace(/\s+/g, " ").slice(0, 120);
+  return {
+    type,
+    source: String(raw.source || "").slice(0, 80),
+    fullName,
+    firstName,
+    lastName,
+    email: String(raw.email || "").trim().slice(0, 160),
+    phone: String(raw.phone || "").trim().slice(0, 80),
+    customerId: String(raw.customerId || "").trim().slice(0, 120),
+    merchantId: String(raw.merchantId || "").trim().slice(0, 120)
+  };
+}
+
+function buildCustomerMetaLine(info, fallbackPhone) {
+  const parts = [];
+  parts.push(info.type === "member" ? "Üye" : "Misafir");
+  if (info.email) parts.push(info.email);
+  if (info.phone || fallbackPhone) parts.push(info.phone || fallbackPhone);
+  if (info.customerId) parts.push(`ikas ID: ${info.customerId}`);
+  return parts.filter(Boolean).join(" • ").slice(0, 260);
 }
 
 function guessVisitorName(text) {
