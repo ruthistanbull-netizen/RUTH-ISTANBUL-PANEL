@@ -31,6 +31,7 @@ const IKAS_STOREFRONT_URL = normalizeStorefrontUrl(process.env.IKAS_STOREFRONT_U
 const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_FETCH_STOREFRONT_IMAGES || "1") !== "0";
 let ikasTokenCache = { token: "", expiresAt: 0 };
 let storefrontImageCache = { expiresAt: 0, bySlug: new Map(), byName: new Map(), urls: [] };
+let ikasSummaryCache = { expiresAt: 0, value: null };
 const MAX_IMAGE_BYTES = Number(process.env.RUTH_MAX_IMAGE_BYTES || 2_500_000);
 const ADMIN_NOTIFICATION_TITLE = "RUTH ISTANBUL";
 
@@ -499,28 +500,36 @@ async function ikasGraphQL(query, variables = {}, label = "ikas") {
 }
 
 
-async function fetchIkasPaginatedList({ label, rootField, fields, normalize, maxPages = 80 }) {
+
+async function fetchIkasPaginatedList({ label, rootField, fields, normalize, maxPages = 120 }) {
   const limit = 200;
   const all = [];
   const seen = new Set();
   const errors = [];
 
-  const pagedQuery = (page) => `query RuthPaged${rootField}${page} { ${rootField}(pagination: { limit: ${limit}, page: ${page} }) { data { ${fields} } } }`;
+  async function runQuery(queryLabel, query) {
+    const data = await ikasGraphQL(query, {}, queryLabel);
+    const node = data && data[rootField];
+    if (Array.isArray(node)) return { rows: node, hasNext: false };
+    if (node && Array.isArray(node.data)) return { rows: node.data, hasNext: Boolean(node.hasNext) };
+    return { rows: [], hasNext: false };
+  }
+
+  // ikas pagination max limit 200. Some stores reject optional arguments,
+  // so this first tries paginated, then safely falls back to no-args.
   for (let page = 1; page <= maxPages; page += 1) {
+    const q = `query RuthPaged${rootField}${page} { ${rootField}(pagination: { limit: ${limit}, page: ${page} }) { count hasNext limit page data { ${fields} } } }`;
     try {
-      const data = await ikasGraphQL(pagedQuery(page), {}, `${label} page ${page}`);
-      const rows = data && data[rootField] && Array.isArray(data[rootField].data) ? data[rootField].data : [];
+      const { rows, hasNext } = await runQuery(`${label} page ${page}`, q);
       if (!rows.length) break;
-      let added = 0;
       for (const row of rows) {
         const key = String(row && (row.id || row.orderNumber || row.name) || JSON.stringify(row).slice(0, 80));
         if (!seen.has(key)) {
           seen.add(key);
           all.push(row);
-          added += 1;
         }
       }
-      if (rows.length < limit || added === 0) break;
+      if (!hasNext || rows.length < limit) break;
     } catch (error) {
       errors.push(error && error.message ? error.message : String(error));
       break;
@@ -531,62 +540,161 @@ async function fetchIkasPaginatedList({ label, rootField, fields, normalize, max
 
   const noArgQuery = `query RuthNoArg${rootField} { ${rootField} { data { ${fields} } } }`;
   try {
-    const data = await ikasGraphQL(noArgQuery, {}, `${label} no-args`);
-    const rows = data && data[rootField] && Array.isArray(data[rootField].data) ? data[rootField].data : [];
+    const { rows } = await runQuery(`${label} no-args`, noArgQuery);
     return normalize(rows || []);
   } catch (error) {
     errors.push(error && error.message ? error.message : String(error));
   }
 
-  throw new Error(errors.join(" || ").slice(0, 1600));
+  throw new Error(errors.join(" || ").slice(0, 1800));
 }
 
-async function fetchIkasOrders() {
-  const fullFields = `
-    id
-    orderNumber
-    orderSequence
-    orderedAt
-    createdAt
-    updatedAt
-    status
-    orderPackageStatus
-    orderPaymentStatus
-    totalFinalPrice
-    totalPrice
-    currencySymbol
-    currencyCode
-    customer { id fullName firstName lastName email phone isGuestCheckout }
-    shippingAddress { firstName lastName phone city { name } district { name } }
-    orderPackages { id orderPackageNumber orderPackageFulfillStatus trackingInfo { cargoCompany trackingNumber trackingLink } }
-    orderLineItems {
-      id
-      quantity
-      status
-      finalPrice
-      price
-      options { name values { name value } }
-      variant {
-        id
-        name
-        sku
-        slug
-        productId
-        mainImageId
-        categories { id name }
-        variantValues { variantTypeName variantValueName }
-      }
-    }
-  `;
 
-  const normalize = (rows) => normalizeIkasOrders(rows);
-  return fetchIkasPaginatedList({
-    label: "ikas orders",
-    rootField: "listOrder",
-    fields: fullFields,
-    normalize,
-    maxPages: 120
-  });
+async function fetchIkasOrders() {
+  const attempts = [
+    {
+      label: "ikas orders full",
+      fields: `
+        id
+        orderNumber
+        orderSequence
+        orderedAt
+        createdAt
+        updatedAt
+        status
+        orderPackageStatus
+        orderPaymentStatus
+        totalFinalPrice
+        totalPrice
+        currencySymbol
+        currencyCode
+        customer { id fullName firstName lastName email phone isGuestCheckout }
+        shippingAddress { firstName lastName phone city { name } district { name } }
+        orderPackages { id orderPackageNumber orderPackageFulfillStatus trackingInfo { cargoCompany trackingNumber trackingLink } }
+        orderLineItems {
+          id
+          quantity
+          status
+          finalPrice
+          price
+          options { name values { name value } }
+          variant {
+            id
+            sku
+            barcodeList
+            name
+            slug
+            productId
+            mainImageId
+            categories { id name }
+            variantValues { variantTypeName variantValueName }
+          }
+        }
+      `
+    },
+    {
+      label: "ikas orders safe",
+      fields: `
+        id
+        orderNumber
+        orderSequence
+        orderedAt
+        createdAt
+        updatedAt
+        status
+        orderPackageStatus
+        orderPaymentStatus
+        totalFinalPrice
+        totalPrice
+        currencySymbol
+        currencyCode
+        customer { id fullName firstName lastName email phone isGuestCheckout }
+        shippingAddress { firstName lastName phone }
+        orderPackages { id orderPackageFulfillStatus }
+        orderLineItems {
+          id
+          quantity
+          status
+          finalPrice
+          price
+          options { name values { name value } }
+          variant {
+            id
+            sku
+            name
+            productId
+            mainImageId
+            variantValues { variantTypeName variantValueName }
+          }
+        }
+      `
+    },
+    {
+      label: "ikas orders minimal",
+      fields: `
+        id
+        orderNumber
+        orderSequence
+        orderedAt
+        createdAt
+        updatedAt
+        status
+        orderPackageStatus
+        orderPaymentStatus
+        totalFinalPrice
+        totalPrice
+        currencySymbol
+        currencyCode
+        customer { id fullName firstName lastName email phone }
+        orderLineItems {
+          id
+          quantity
+          status
+          finalPrice
+          price
+          options { name values { name value } }
+          variant { id sku name }
+        }
+      `
+    },
+    {
+      label: "ikas orders bare",
+      fields: `
+        id
+        orderNumber
+        orderSequence
+        orderedAt
+        createdAt
+        updatedAt
+        status
+        orderPackageStatus
+        orderPaymentStatus
+        totalFinalPrice
+        totalPrice
+        currencySymbol
+        currencyCode
+        customer { id fullName firstName lastName email phone }
+        orderLineItems { id quantity status finalPrice price }
+      `
+    }
+  ];
+
+  const errors = [];
+  for (const attempt of attempts) {
+    try {
+      const orders = await fetchIkasPaginatedList({
+        label: attempt.label,
+        rootField: "listOrder",
+        fields: attempt.fields,
+        normalize: normalizeIkasOrders,
+        maxPages: 180
+      });
+      if (Array.isArray(orders)) return orders;
+    } catch (error) {
+      errors.push(`${attempt.label}: ${error && error.message ? error.message : String(error)}`);
+    }
+  }
+  throw new Error(errors.join(" || ").slice(0, 1800));
 }
 
 async function fetchIkasCategories() {
@@ -618,35 +726,17 @@ async function fetchIkasCategories() {
   return [];
 }
 
+
 async function fetchIkasProducts(categories = []) {
   if (!ikasConfigured()) return [];
   const categoryMap = new Map((categories || []).map((category) => [String(category.id), category]));
   const normalize = (rows) => normalizeIkasProducts(rows, categoryMap);
 
-  // ikas mağaza şemasında Variant tipinde name/mainImageId/productId alanları yok.
-  // Bu yüzden ürün sorgusunu en güvenli alanlardan başlayarak fallback'li çalıştırıyoruz.
+  // Product.variants is Variant[], but many ikas stores expose fewer fields on Variant.
+  // Never ask name/mainImageId/productId from Product Variant; those caused GRAPHQL_VALIDATION_FAILED.
   const attempts = [
     {
-      label: "ikas products with slug",
-      fields: `
-        id
-        name
-        slug
-        createdAt
-        updatedAt
-        totalStock
-        categoryIds
-        variants {
-          id
-          sku
-          barcodeList
-          slug
-          variantValues { variantTypeName variantValueName }
-        }
-      `
-    },
-    {
-      label: "ikas products safe",
+      label: "ikas products full-safe",
       fields: `
         id
         name
@@ -654,26 +744,52 @@ async function fetchIkasProducts(categories = []) {
         updatedAt
         totalStock
         categoryIds
+        categories { id name }
         variants {
           id
           sku
           barcodeList
+          isActive
+          weight
+          prices { sellPrice discountPrice }
+          stocks { stockCount stockLocationId }
           variantValues { variantTypeName variantValueName }
         }
       `
     },
     {
-      label: "ikas products minimal variants",
+      label: "ikas products categories-safe",
       fields: `
         id
         name
         createdAt
         updatedAt
+        totalStock
         categoryIds
-        variants {
-          id
-          sku
-        }
+        categories { id name }
+        variants { id sku barcodeList variantValues { variantTypeName variantValueName } }
+      `
+    },
+    {
+      label: "ikas products categoryIds-safe",
+      fields: `
+        id
+        name
+        createdAt
+        updatedAt
+        totalStock
+        categoryIds
+        variants { id sku barcodeList variantValues { variantTypeName variantValueName } }
+      `
+    },
+    {
+      label: "ikas products minimal-variants",
+      fields: `
+        id
+        name
+        totalStock
+        categoryIds
+        variants { id sku }
       `
     },
     {
@@ -681,6 +797,7 @@ async function fetchIkasProducts(categories = []) {
       fields: `
         id
         name
+        totalStock
         categoryIds
       `
     }
@@ -694,7 +811,7 @@ async function fetchIkasProducts(categories = []) {
         rootField: "listProduct",
         fields: attempt.fields,
         normalize,
-        maxPages: 120
+        maxPages: 180
       });
       if (Array.isArray(products)) return products;
     } catch (error) {
@@ -702,12 +819,33 @@ async function fetchIkasProducts(categories = []) {
     }
   }
 
-  console.error("ikas products error:", errors.join(" || ").slice(0, 1600));
+  console.error("ikas products error:", errors.join(" || ").slice(0, 1800));
   return [];
 }
 
+
 function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
   return rawProducts.map((product) => {
+    const categoryIds = Array.isArray(product.categoryIds)
+      ? product.categoryIds.map(valueOrEmpty).filter(Boolean)
+      : [];
+
+    const directCategories = Array.isArray(product.categories)
+      ? product.categories.map((category) => ({
+          id: valueOrEmpty(category.id),
+          name: valueOrEmpty(category.name) || "Kategori",
+          image: buildIkasImageUrl(category.imageId),
+          imageId: valueOrEmpty(category.imageId)
+        })).filter((category) => category.id || category.name)
+      : [];
+
+    const categories = directCategories.length
+      ? directCategories
+      : categoryIds.map((id) => {
+          const found = categoryMap.get(id);
+          return found || { id, name: `Kategori ${id.slice(0, 6)}`, image: "", imageId: "" };
+        }).filter((category) => category.id || category.name);
+
     const variants = Array.isArray(product.variants) ? product.variants.map((variant) => {
       const variantText = Array.isArray(variant.variantValues)
         ? variant.variantValues.map((value) => {
@@ -716,45 +854,41 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
             return right ? (left ? `${left}: ${right}` : right) : "";
           }).filter(Boolean).join(" / ")
         : "";
-      const mainImageId = valueOrEmpty(variant.mainImageId);
+      const stockFromStocks = Array.isArray(variant.stocks)
+        ? variant.stocks.reduce((sum, item) => sum + Number(item.stockCount || 0), 0)
+        : 0;
       return {
         id: valueOrEmpty(variant.id),
-        name: valueOrEmpty(variant.name) || valueOrEmpty(product.name) || "Ürün",
+        name: valueOrEmpty(product.name) || "Ürün",
         sku: valueOrEmpty(variant.sku),
         barcode: Array.isArray(variant.barcodeList) ? variant.barcodeList.join(", ") : "",
-        mainImageId,
-        image: buildIkasImageUrl(mainImageId),
-        productId: valueOrEmpty(variant.productId) || valueOrEmpty(product.id),
-        slug: valueOrEmpty(variant.slug),
-        variantText
+        mainImageId: "",
+        image: "",
+        productId: valueOrEmpty(product.id),
+        slug: "",
+        variantText,
+        sellPrice: Number((variant.prices && variant.prices.sellPrice) || 0),
+        discountPrice: Number((variant.prices && variant.prices.discountPrice) || 0),
+        stock: stockFromStocks,
+        isActive: typeof variant.isActive === "boolean" ? variant.isActive : true
       };
     }) : [];
 
-    const categoryIds = Array.isArray(product.categoryIds) ? product.categoryIds.map(valueOrEmpty).filter(Boolean) : [];
-    const categories = categoryIds.map((id) => {
-      const found = categoryMap.get(id);
-      return found || { id, name: `Kategori ${id.slice(0, 6)}`, image: "", imageId: "" };
-    }).filter((category) => category.id || category.name);
-
-    const image = variants.find((variant) => variant.image)?.image || "";
-    const mainImageId = variants.find((variant) => variant.mainImageId)?.mainImageId || "";
+    const image = "";
     return {
       id: valueOrEmpty(product.id),
       name: valueOrEmpty(product.name) || "Ürün",
-      slug: valueOrEmpty(product.slug),
+      slug: "",
       image,
-      mainImageId,
-      totalStock: Number(product.totalStock || 0),
+      mainImageId: "",
+      totalStock: Number(product.totalStock || variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0) || 0),
+      categoryIds: categoryIds.length ? categoryIds : categories.map((category) => category.id).filter(Boolean),
       categories,
-      categoryIds,
-      categoryNames: categories.map((category) => category.name).filter(Boolean),
       variants,
-      variantCount: variants.length,
       createdAt: normalizeIkasDate(product.createdAt),
-      updatedAt: normalizeIkasDate(product.updatedAt),
-      sortValue: ikasDateSortValue(product.updatedAt || product.createdAt)
+      updatedAt: normalizeIkasDate(product.updatedAt)
     };
-  }).sort((a, b) => Number(b.sortValue || 0) - Number(a.sortValue || 0) || String(a.name || "").localeCompare(String(b.name || ""), "tr"));
+  }).filter((product) => product.id || product.name);
 }
 
 function mergeOrderImagesIntoProducts(products, orders) {
@@ -807,6 +941,10 @@ function buildCollectionsFromProducts(products, categories = []) {
 }
 
 async function buildIkasSummary() {
+  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 120000));
+  if (cacheMs && ikasSummaryCache.value && ikasSummaryCache.expiresAt > Date.now()) {
+    return ikasSummaryCache.value;
+  }
   if (!ikasConfigured()) {
     return {
       connected: false,
@@ -865,7 +1003,7 @@ async function buildIkasSummary() {
   const readyUnits = readyOrders.reduce((sum, order) => sum + order.items.reduce((s, item) => s + Number(item.quantity || 0), 0), 0);
   const revenue = orders.reduce((sum, order) => sum + Number(order.total || 0), 0);
 
-  return {
+  const summary = {
     connected: true,
     updatedAt: new Date().toISOString(),
     orderError,
@@ -890,6 +1028,8 @@ async function buildIkasSummary() {
     collections,
     categories
   };
+  ikasSummaryCache = { expiresAt: Date.now() + Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 120000)), value: summary };
+  return summary;
 }
 
 function ikasDateSortValue(value) {
@@ -951,13 +1091,14 @@ function normalizeIkasOrders(rawOrders) {
   }).sort(orderNewestFirst);
 }
 
+
 function normalizeIkasLineItem(item, order) {
   const variant = item && item.variant ? item.variant : {};
   const variantText = buildVariantText(item, variant);
-  const name = valueOrEmpty(variant.name) || "Ürün";
+  const name = valueOrEmpty(variant.name) || valueOrEmpty(item && item.name) || "Ürün";
   const mainImageId = valueOrEmpty(variant.mainImageId);
   return {
-    id: valueOrEmpty(item.id) || valueOrEmpty(variant.id),
+    id: valueOrEmpty(item && item.id) || valueOrEmpty(variant.id),
     variantId: valueOrEmpty(variant.id),
     productId: valueOrEmpty(variant.productId),
     name: variantText ? `${name} — ${variantText}` : name,
@@ -968,9 +1109,9 @@ function normalizeIkasLineItem(item, order) {
     image: buildIkasImageUrl(mainImageId),
     mainImageId,
     categories: Array.isArray(variant.categories) ? variant.categories.map((category) => ({ id: valueOrEmpty(category.id), name: valueOrEmpty(category.name) })).filter((category) => category.id || category.name) : [],
-    quantity: Number(item.quantity || 0),
-    statusRaw: valueOrEmpty(item.status),
-    status: translateLineStatus(item.status),
+    quantity: Number((item && item.quantity) || 0),
+    statusRaw: valueOrEmpty(item && item.status),
+    status: translateLineStatus(item && item.status),
     orderNumber: order && order.orderNumber ? `#${order.orderNumber}` : "",
     orderId: valueOrEmpty(order && order.id)
   };
