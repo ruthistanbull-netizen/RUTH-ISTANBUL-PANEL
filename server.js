@@ -3,6 +3,54 @@ const fs = require("fs");
 const http = require("http");
 const path = require("path");
 
+// Render/Node fetch guard: ikas veya site görsel isteklerinde uzak sunucu bağlantıyı kapatırsa
+// tüm panelin çökmesini engeller ve kısa timeout/retry uygular.
+const RUTH_FETCH_TIMEOUT_MS = Math.max(5000, Number(process.env.RUTH_FETCH_TIMEOUT_MS || 25000));
+const RUTH_FETCH_RETRIES = Math.max(0, Number(process.env.RUTH_FETCH_RETRIES || 1));
+const nativeFetch = global.fetch ? global.fetch.bind(global) : null;
+function isTransientFetchError(error) {
+  const message = String((error && (error.code || error.message || error.cause && error.cause.code)) || '');
+  return /UND_ERR_SOCKET|ECONNRESET|ETIMEDOUT|EAI_AGAIN|other side closed|socket|terminated|fetch failed/i.test(message);
+}
+if (nativeFetch) {
+  global.fetch = async function ruthSafeFetch(url, options = {}) {
+    let lastError = null;
+    for (let attempt = 0; attempt <= RUTH_FETCH_RETRIES; attempt += 1) {
+      const controller = !options.signal && typeof AbortController !== 'undefined' ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), RUTH_FETCH_TIMEOUT_MS) : null;
+      try {
+        const headers = { ...(options.headers || {}) };
+        if (!headers['User-Agent'] && !headers['user-agent']) headers['User-Agent'] = 'RUTH-Istanbul-Panel/1.0';
+        const response = await nativeFetch(url, { ...options, headers, signal: controller ? controller.signal : options.signal });
+        if (timer) clearTimeout(timer);
+        return response;
+      } catch (error) {
+        if (timer) clearTimeout(timer);
+        lastError = error;
+        if (!isTransientFetchError(error) || attempt >= RUTH_FETCH_RETRIES) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 400 + attempt * 700));
+      }
+    }
+    throw lastError;
+  };
+}
+process.on('unhandledRejection', (error) => {
+  if (isTransientFetchError(error)) {
+    console.error('Transient fetch warning:', error && (error.code || error.message) ? (error.code || error.message) : error);
+    return;
+  }
+  console.error('Unhandled rejection:', error && error.stack ? error.stack : error);
+});
+process.on('uncaughtException', (error) => {
+  if (isTransientFetchError(error)) {
+    console.error('Transient socket warning:', error && (error.code || error.message) ? (error.code || error.message) : error);
+    return;
+  }
+  console.error('Uncaught exception:', error && error.stack ? error.stack : error);
+  process.exit(1);
+});
+
+
 let webPush = null;
 try {
   webPush = require("web-push");
@@ -28,7 +76,7 @@ const IKAS_CLIENT_SECRET = String(process.env.IKAS_CLIENT_SECRET || "").trim();
 const IKAS_GRAPHQL_URL = String(process.env.IKAS_GRAPHQL_URL || "https://api.myikas.com/api/v1/admin/graphql").trim();
 const IKAS_TOKEN_URL = IKAS_STORE_NAME ? `https://${IKAS_STORE_NAME}.myikas.com/api/admin/oauth/token` : "";
 const IKAS_STOREFRONT_URL = normalizeStorefrontUrl(process.env.IKAS_STOREFRONT_URL || process.env.RUTH_SITE_URL || "https://ruthistanbul.com");
-const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_FETCH_STOREFRONT_IMAGES || "1") !== "0";
+const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_FETCH_STOREFRONT_IMAGES || "0") === "1";
 let ikasTokenCache = { token: "", expiresAt: 0 };
 let storefrontImageCache = { expiresAt: 0, bySlug: new Map(), byName: new Map(), urls: [] };
 let ikasSummaryCache = { expiresAt: 0, value: null };
@@ -1311,9 +1359,9 @@ async function enrichIkasImagesDirectFromProductPages(orders, products, categori
   });
 
   if (!targets.length) return;
-  const limit = Math.max(1, Math.min(1200, Number(process.env.IKAS_DIRECT_IMAGE_LIMIT || 1200)));
+  const limit = Math.max(1, Math.min(150, Number(process.env.IKAS_DIRECT_IMAGE_LIMIT || 80)));
   const limited = targets.slice(0, limit);
-  const concurrency = Math.max(1, Math.min(8, Number(process.env.IKAS_DIRECT_IMAGE_CONCURRENCY || 5)));
+  const concurrency = Math.max(1, Math.min(3, Number(process.env.IKAS_DIRECT_IMAGE_CONCURRENCY || 2)));
   let index = 0;
   let found = 0;
 
@@ -1455,8 +1503,8 @@ async function getStorefrontImageMap() {
   const bySlug = new Map();
   const byName = new Map();
   const urls = await discoverStorefrontProductUrls();
-  const limited = urls.slice(0, Number(process.env.IKAS_STOREFRONT_IMAGE_LIMIT || 900));
-  const concurrency = Math.max(1, Math.min(8, Number(process.env.IKAS_STOREFRONT_IMAGE_CONCURRENCY || 5)));
+  const limited = urls.slice(0, Number(process.env.IKAS_STOREFRONT_IMAGE_LIMIT || 120));
+  const concurrency = Math.max(1, Math.min(3, Number(process.env.IKAS_STOREFRONT_IMAGE_CONCURRENCY || 2)));
   let index = 0;
   async function worker() {
     while (index < limited.length) {
