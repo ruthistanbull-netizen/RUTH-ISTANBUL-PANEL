@@ -854,6 +854,7 @@ async function buildIkasSummary() {
   }
 
   products = mergeOrderImagesIntoProducts(products, orders);
+  await enrichIkasImagesDirectFromProductPages(orders, products, categories);
   await enrichIkasImagesFromStorefront(orders, products, categories);
   products = mergeOrderImagesIntoProducts(products, orders);
   const collections = buildCollectionsFromProducts(products, categories);
@@ -1006,6 +1007,121 @@ function buildIkasImageUrl(mainImageId) {
   const base = String(process.env.IKAS_IMAGE_BASE_URL || "").trim().replace(/\/+$/, "");
   if (base) return `${base}/${encodeURIComponent(id)}`;
   return "";
+}
+
+
+async function enrichIkasImagesDirectFromProductPages(orders, products, categories) {
+  if (!IKAS_FETCH_STOREFRONT_IMAGES || !IKAS_STOREFRONT_URL) return;
+  const targets = [];
+  const pushTarget = (kind, item, setter) => {
+    if (!item || item.image) return;
+    const candidates = buildStorefrontProductUrlCandidates(item);
+    if (!candidates.length) return;
+    targets.push({ kind, item, setter, candidates });
+  };
+
+  (products || []).forEach((product) => {
+    pushTarget("product", product, (image) => { product.image = image; });
+    (product.variants || []).forEach((variant) => {
+      pushTarget("variant", { ...variant, name: product.name, baseName: product.name, productSlug: product.slug }, (image) => {
+        variant.image = image;
+        if (!product.image) product.image = image;
+      });
+    });
+  });
+
+  (orders || []).forEach((order) => {
+    (order.items || []).forEach((item) => {
+      pushTarget("orderItem", item, (image) => { item.image = image; });
+    });
+  });
+
+  if (!targets.length) return;
+  const limit = Math.max(1, Math.min(1200, Number(process.env.IKAS_DIRECT_IMAGE_LIMIT || 1200)));
+  const limited = targets.slice(0, limit);
+  const concurrency = Math.max(1, Math.min(8, Number(process.env.IKAS_DIRECT_IMAGE_CONCURRENCY || 5)));
+  let index = 0;
+  let found = 0;
+
+  async function worker() {
+    while (index < limited.length) {
+      const target = limited[index++];
+      try {
+        for (const url of target.candidates) {
+          const info = await fetchStorefrontProductImage(url);
+          if (info && info.image) {
+            target.setter(info.image);
+            found += 1;
+            break;
+          }
+        }
+      } catch (error) {}
+    }
+  }
+
+  await Promise.all(Array.from({ length: concurrency }, worker));
+
+  // Sipariş satırındaki görseli aynı SKU/ürün adına sahip ürün kartlarına da yay.
+  const byName = new Map();
+  const bySku = new Map();
+  (orders || []).forEach((order) => {
+    (order.items || []).forEach((item) => {
+      if (!item || !item.image) return;
+      if (item.sku) bySku.set(String(item.sku).toLowerCase(), item.image);
+      const key = normalizeLookupText(item.baseName || item.name);
+      if (key) byName.set(key, item.image);
+    });
+  });
+  (products || []).forEach((product) => {
+    if (!product.image) {
+      const key = normalizeLookupText(product.name);
+      const img = key ? byName.get(key) : "";
+      if (img) product.image = img;
+    }
+    (product.variants || []).forEach((variant) => {
+      if (!variant.image && variant.sku && bySku.has(String(variant.sku).toLowerCase())) variant.image = bySku.get(String(variant.sku).toLowerCase());
+      if (!product.image && variant.image) product.image = variant.image;
+    });
+  });
+
+  if (found) console.log(`Ikas direct storefront images matched: ${found}`);
+}
+
+function buildStorefrontProductUrlCandidates(item) {
+  const slugs = [];
+  const pushSlug = (value) => {
+    const raw = String(value || "").trim();
+    if (!raw) return;
+    if (/^https?:\/\//i.test(raw)) {
+      slugs.push(raw);
+      return;
+    }
+    const clean = normalizeSlug(raw.replace(/^\/+|\/+$/g, ""));
+    if (clean) slugs.push(clean);
+  };
+
+  pushSlug(item.slug);
+  pushSlug(item.productSlug);
+  pushSlug(item.handle);
+
+  const names = [item.baseName, item.name].filter(Boolean);
+  names.forEach((name) => {
+    const base = String(name || "").replace(/—.*$/g, "").replace(/\s+-\s+.*$/g, "").trim();
+    pushSlug(base);
+    // Ruth ürünlerinde bazı brass ürün URL'lerinde "the" düşebiliyor ve sona brass eklenebiliyor.
+    const withoutThe = base.replace(/^the\s+/i, "");
+    if (withoutThe !== base) pushSlug(withoutThe);
+    if (/ring|necklace|bracelet|set/i.test(base)) {
+      pushSlug(`${base} brass`);
+      if (withoutThe !== base) pushSlug(`${withoutThe} brass`);
+    }
+  });
+
+  const unique = [...new Set(slugs)].slice(0, 8);
+  return unique.map((slug) => {
+    if (/^https?:\/\//i.test(slug)) return slug;
+    return new URL(`/${slug}`, IKAS_STOREFRONT_URL).toString();
+  });
 }
 
 async function enrichIkasImagesFromStorefront(orders, products, categories) {
