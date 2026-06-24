@@ -1084,6 +1084,19 @@ async function fetchIkasProducts(categories = []) {
   // Variant alanları mağazaya göre farklı çıktığı için ürün listesini patlatmamak adına burada çekmiyoruz.
   const attempts = [
     {
+      label: "ikas products variants-safe",
+      fields: `
+        id
+        name
+        categoryIds
+        variants {
+          id
+          sku
+          variantValues { variantTypeName variantValueName }
+        }
+      `
+    },
+    {
       label: "ikas products categoryIds-only",
       fields: `
         id
@@ -1219,24 +1232,30 @@ function mergeOrderImagesIntoProducts(products, orders) {
 function enrichOrdersWithProducts(orders, products) {
   const byVariantId = new Map();
   const byProductId = new Map();
+  const bySku = new Map();
   (products || []).forEach((product) => {
     if (product && product.id) byProductId.set(String(product.id), product);
     (product.variants || []).forEach((variant) => {
       if (variant && variant.id) byVariantId.set(String(variant.id), { product, variant });
+      if (variant && variant.sku) bySku.set(String(variant.sku).toLocaleLowerCase("tr"), { product, variant });
     });
   });
   return (orders || []).map((order) => {
     const nextOrder = { ...order };
     nextOrder.items = (order.items || []).map((item) => {
-      const found = item.variantId ? byVariantId.get(String(item.variantId)) : null;
+      const foundByVariant = item.variantId ? byVariantId.get(String(item.variantId)) : null;
+      const foundBySku = !foundByVariant && item.sku ? bySku.get(String(item.sku).toLocaleLowerCase("tr")) : null;
+      const found = foundByVariant || foundBySku || null;
       const product = found ? found.product : (item.productId ? byProductId.get(String(item.productId)) : null);
       if (!product) return item;
       const baseName = item.baseName && item.baseName !== "Ürün" ? item.baseName : (product.name || item.baseName || "Ürün");
+      const variantText = item.variantText || (found && found.variant && found.variant.variantText) || "";
       return {
         ...item,
         productId: item.productId || product.id || "",
         baseName,
-        name: item.variantText ? `${baseName} — ${item.variantText}` : baseName,
+        variantText,
+        name: variantText ? `${baseName} — ${variantText}` : baseName,
         image: item.image || product.image || (found && found.variant && found.variant.image) || "",
         mainImageId: item.mainImageId || product.mainImageId || (found && found.variant && found.variant.mainImageId) || "",
         categories: item.categories && item.categories.length ? item.categories : (product.categories || []),
@@ -1439,19 +1458,33 @@ function normalizeIkasOrders(rawOrders) {
 
 function normalizeIkasLineItem(item, order) {
   const variant = item && item.variant ? item.variant : {};
+  const product = item && item.product ? item.product : {};
   const variantText = buildVariantText(item, variant);
-  const name = valueOrEmpty(variant.name) || valueOrEmpty(item && item.name) || "Ürün";
-  const mainImageId = valueOrEmpty(variant.mainImageId);
+  const name =
+    valueOrEmpty(product.name) ||
+    valueOrEmpty(item && item.productName) ||
+    valueOrEmpty(item && item.productTitle) ||
+    valueOrEmpty(item && item.title) ||
+    valueOrEmpty(variant.name) ||
+    valueOrEmpty(item && item.name) ||
+    "Ürün";
+  const mainImageId = valueOrEmpty(variant.mainImageId || product.mainImageId || item && item.mainImageId);
+  const directImage =
+    valueOrEmpty(item && item.imageUrl) ||
+    valueOrEmpty(item && item.image) ||
+    valueOrEmpty(product.imageUrl) ||
+    valueOrEmpty(product.image) ||
+    buildIkasImageUrl(mainImageId);
   return {
     id: valueOrEmpty(item && item.id) || valueOrEmpty(variant.id),
-    variantId: valueOrEmpty(variant.id),
-    productId: valueOrEmpty(variant.productId),
+    variantId: valueOrEmpty(variant.id) || valueOrEmpty(item && item.variantId),
+    productId: valueOrEmpty(product.id) || valueOrEmpty(item && item.productId) || valueOrEmpty(variant.productId),
     name: variantText ? `${name} — ${variantText}` : name,
     baseName: name,
     variantText,
-    sku: valueOrEmpty(variant.sku),
-    slug: valueOrEmpty(variant.slug),
-    image: buildIkasImageUrl(mainImageId),
+    sku: valueOrEmpty(variant.sku) || valueOrEmpty(item && item.sku),
+    slug: valueOrEmpty(product.slug) || valueOrEmpty(variant.slug) || valueOrEmpty(item && item.slug),
+    image: directImage,
     mainImageId,
     categories: Array.isArray(variant.categories) ? variant.categories.map((category) => ({ id: valueOrEmpty(category.id), name: valueOrEmpty(category.name) })).filter((category) => category.id || category.name) : [],
     quantity: Number((item && item.quantity) || 0),
@@ -1537,13 +1570,16 @@ const RUTH_MANUAL_PRODUCT_URL_OVERRIDES = new Map([
   ["the-sign-eon-icon", "https://ruthistanbul.com/the-sign-eon-icon"],
   ["sign-eon-icon", "https://ruthistanbul.com/the-sign-eon-icon"],
   ["the crystal path bracelet", "https://ruthistanbul.com/crystal-path"],
+  ["the gemston ring ayarlanabilir", "https://ruthistanbul.com/gemston"],
+  ["the-gemston-ring-ayarlanabilir", "https://ruthistanbul.com/gemston"],
+  ["gemston-ring-ayarlanabilir", "https://ruthistanbul.com/gemston"],
   ["the gemston ring", "https://ruthistanbul.com/gemston"],
   ["the night path necklace", "__UNPUBLISHED__"],
   ["the obsidian sun necklace", "https://ruthistanbul.com/the-obsidian-sun-amulet-ham-ve-organik-formuyla-bohem-ruha-seslenirken-merkezindeki-parlak-motiflerle-umudu-ve-isigi-temsil-ediyor-oksitli-koyu-gri-siyah-zeminin-uzerine-islenmis-b"],
   ["the siren's scroll necklace", "https://ruthistanbul.com/the-sirens-scroll-necklace-ile-doganin-kivrimli-akiskan-formlarini-boynunuza-tasiyin-duzensiz-ham-hatli-kolye-ucu-uzerinde-yer-alan-detayli-kivrimli-motif-mistik-ve-sucul-bir-hava"],
   ["the sirens scroll necklace", "https://ruthistanbul.com/the-sirens-scroll-necklace-ile-doganin-kivrimli-akiskan-formlarini-boynunuza-tasiyin-duzensiz-ham-hatli-kolye-ucu-uzerinde-yer-alan-detayli-kivrimli-motif-mistik-ve-sucul-bir-hava"],
   ["the sunrise necklace", "https://ruthistanbul.com/the-sunrise-fan-necklace"],
-  ["the trilogy of sun: antik formlar seti", "__UNPUBLISHED__"],
+  ["the trilogy of sun: antik formlar seti", "https://ruthistanbul.com/the-sign-eon-icon"],
   ["gardēdis", "https://ruthistanbul.com/garddis"],
   ["gardedis", "https://ruthistanbul.com/garddis"],
   ["mâ", "https://ruthistanbul.com/ma-"],
@@ -1554,7 +1590,7 @@ const RUTH_MANUAL_PRODUCT_URL_OVERRIDES = new Map([
   ["obsidian-sun-necklace", "https://ruthistanbul.com/the-obsidian-sun-amulet-ham-ve-organik-formuyla-bohem-ruha-seslenirken-merkezindeki-parlak-motiflerle-umudu-ve-isigi-temsil-ediyor-oksitli-koyu-gri-siyah-zeminin-uzerine-islenmis-b"],
   ["sirens-scroll-necklace", "https://ruthistanbul.com/the-sirens-scroll-necklace-ile-doganin-kivrimli-akiskan-formlarini-boynunuza-tasiyin-duzensiz-ham-hatli-kolye-ucu-uzerinde-yer-alan-detayli-kivrimli-motif-mistik-ve-sucul-bir-hava"],
   ["sunrise-necklace", "https://ruthistanbul.com/the-sunrise-fan-necklace"],
-  ["trilogy-of-sun-antik-formlar-seti", "__UNPUBLISHED__"],
+  ["trilogy-of-sun-antik-formlar-seti", "https://ruthistanbul.com/the-sign-eon-icon"],
   ["ma-", "https://ruthistanbul.com/ma-"]
 ]);
 
@@ -3015,7 +3051,7 @@ function adminHtml(serverAdmin) {
   function productCard(p){var variantText=(p.variants||[]).slice(0,3).map(function(v){return [v.sku, v.variantText].filter(Boolean).join(' • ')}).filter(Boolean).join(' / '); var cats=(p.categoryNames||[]).slice(0,3).map(function(c){return '<span class="chip">'+escapeHtml(c)+'</span>'}).join(''); return '<div class="product-card">'+imgHtml(p.image,'large')+'<div><div class="name">'+escapeHtml(p.name||'Ürün')+'</div><div class="preview">Stok: '+Number(p.totalStock||0)+' • Varyant: '+Number(p.variantCount||0)+'</div><div class="preview">'+escapeHtml(variantText||'Varyant bilgisi yok')+'</div><div class="chips">'+cats+'</div></div></div>'}
   function readyProductRow(p){var orderText=(p.orders||[]).slice(0,6).map(function(o){return escapeHtml(o.orderNumber)+' × '+Number(o.quantity||0)}).join(' • '); return '<div class="product-row">'+imgHtml(p.image,'')+'<div><div class="name">'+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+(p.sku?'SKU: '+escapeHtml(p.sku)+' • ':'')+orderText+'</div></div><div class="qty">'+Number(p.quantity||0)+'</div></div>'}
   function collectionCard(c){var productNames=(c.products||[]).slice(0,5).map(function(p){return escapeHtml(p.name)}).join(' • '); return '<div class="collection-card">'+imgHtml(c.image,'large')+'<div><div class="name">'+escapeHtml(c.name||'Koleksiyon')+'</div><div class="preview">'+Number(c.productCount||0)+' ürün</div><div class="preview" style="white-space:normal">'+productNames+'</div></div></div>'}
-  function buildClientReadyProductTotals(orders){var map={}; (orders||[]).forEach(function(o){(o.items||[]).forEach(function(i){var key=(i.variantId||i.productId||i.name||'urun')+'|'+(i.sku||''); if(!map[key])map[key]={name:i.name||'Ürün',sku:i.sku||'',image:i.image||'',mainImageId:i.mainImageId||'',quantity:0,orders:[]}; map[key].quantity+=Number(i.quantity||0); map[key].orders.push({orderNumber:o.number||o.orderNumber||'',quantity:Number(i.quantity||0)})})}); return Object.keys(map).map(function(k){return map[k]}).sort(function(a,b){return Number(b.quantity||0)-Number(a.quantity||0)||String(a.name).localeCompare(String(b.name),'tr')})}
+  function buildClientReadyProductTotals(orders){var map={}; (orders||[]).forEach(function(o){(o.items||[]).forEach(function(i){var displayName=(i.name&&i.name!=='Ürün'?i.name:(i.baseName&&i.baseName!=='Ürün'?i.baseName:'Ürün')); var key=(i.variantId||i.productId||i.sku||displayName||'urun')+'|'+(i.sku||''); if(!map[key])map[key]={name:displayName,sku:i.sku||'',image:i.image||'',mainImageId:i.mainImageId||'',quantity:0,orders:[]}; map[key].quantity+=Number(i.quantity||0); map[key].orders.push({orderNumber:o.number||o.orderNumber||'',quantity:Number(i.quantity||0)})})}); return Object.keys(map).map(function(k){return map[k]}).sort(function(a,b){return Number(b.quantity||0)-Number(a.quantity||0)||String(a.name).localeCompare(String(b.name),'tr')})}
 
   function includesText(value, term){return String(value||'').toLocaleLowerCase('tr-TR').indexOf(term)>=0}
   function filterOrdersBySearch(list){var term=String(orderSearch||'').trim().toLocaleLowerCase('tr-TR'); if(!term)return list; return (list||[]).filter(function(o){var productText=(o.items||[]).map(function(i){return [i.name,i.sku,i.status].join(' ')}).join(' '); return includesText([o.number,o.orderNumber,o.customer,o.status,o.packageStatus,o.paymentStatus,productText].join(' '),term)})}
