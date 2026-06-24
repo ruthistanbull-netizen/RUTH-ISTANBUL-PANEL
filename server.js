@@ -2187,14 +2187,16 @@ function serveStatic(req, res, url) {
   if (url.pathname === "/admin" || url.pathname === "/admin/") {
     const adminFile = path.join(PUBLIC_DIR, "admin", "index.html");
     if (fs.existsSync(adminFile)) return sendFile(res, adminFile);
-    return sendHtml(res, adminHtml());
+    const serverAdmin = verifyToken(readCookie(req, "ruth_admin_token"));
+    return sendHtml(res, adminHtml(serverAdmin && isKnownAdmin(serverAdmin.sub) ? serverAdmin : null));
   }
 
   if (url.pathname.startsWith("/admin/")) {
     const relative = url.pathname.replace(/^\/admin\/+/, "");
     const filePath = path.join(PUBLIC_DIR, "admin", relative);
     if (fs.existsSync(filePath)) return sendFile(res, filePath);
-    return sendHtml(res, adminHtml());
+    const serverAdmin = verifyToken(readCookie(req, "ruth_admin_token"));
+    return sendHtml(res, adminHtml(serverAdmin && isKnownAdmin(serverAdmin.sub) ? serverAdmin : null));
   }
 
   if (url.pathname === "/manifest.webmanifest") {
@@ -2251,7 +2253,7 @@ function sendBinary(res, buffer, type = "application/octet-stream", status = 200
   return true;
 }
 
-function adminHtml() {
+function adminHtml(serverAdmin) {
   return `<!doctype html>
 <html lang="tr">
 <head>
@@ -2267,6 +2269,9 @@ function adminHtml() {
   <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
   <link rel="manifest" href="/manifest.webmanifest">
   <title>RUTH ISTANBUL Panel</title>
+  <script>
+    window.__RUTH_SERVER_AUTH__ = ${JSON.stringify(serverAdmin ? { ok: true, username: serverAdmin.sub || "admin" } : { ok: false })};
+  </script>
   <style>
     :root{
       --bg:#050607;
@@ -2378,6 +2383,7 @@ function adminHtml() {
           .then(function(data){
             if(!data.token) throw new Error('token alınamadı');
             localStorage.setItem('ruth_admin_token', data.token);
+            sessionStorage.setItem('ruth_admin_force_open','1');
             location.reload();
           })
           .catch(function(err){
@@ -2522,14 +2528,14 @@ function adminHtml() {
   function applyDateFilter(list){var r=activeDateRange(); if(!list||datePreset==='all')return (list||[]).slice(); return (list||[]).filter(function(o){var t=orderTime(o); return t && t>=r.start && t<r.end})}
   function syncDateControls(){qsa('[data-date-filter]').forEach(function(w){var sel=w.querySelector('[data-date-preset]'); var st=w.querySelector('[data-date-start]'); var en=w.querySelector('[data-date-end]'); if(sel)sel.value=datePreset; if(st)st.value=dateStart; if(en)en.value=dateEnd; w.classList.toggle('custom',datePreset==='custom')})}
   function initDateFilters(){qsa('[data-date-filter]').forEach(function(w){var sel=w.querySelector('[data-date-preset]'); var st=w.querySelector('[data-date-start]'); var en=w.querySelector('[data-date-end]'); if(sel&&!sel.dataset.ready){sel.dataset.ready='1';sel.addEventListener('change',function(){datePreset=sel.value||'today'; ordersPage=1; allOrdersPage=1; localStorage.setItem('ruth_panel_date_preset',datePreset); syncDateControls(); renderAll(); renderIkas()})} [st,en].forEach(function(inp){if(inp&&!inp.dataset.ready){inp.dataset.ready='1';inp.addEventListener('change',function(){dateStart=st&&st.value||''; dateEnd=en&&en.value||''; ordersPage=1; allOrdersPage=1; localStorage.setItem('ruth_panel_date_start',dateStart); localStorage.setItem('ruth_panel_date_end',dateEnd); renderAll(); renderIkas()})}})}); syncDateControls()}
-  function api(path,opts){opts=opts||{}; opts.headers=opts.headers||{}; opts.credentials='same-origin'; opts.headers['Content-Type']='application/json'; if(token) opts.headers.Authorization='Bearer '+token; return fetch(path,opts).then(function(r){return r.text().then(function(t){var d={}; try{d=t?JSON.parse(t):{}}catch(e){} if(!r.ok){if(r.status===401 && path==='/api/admin/me') logout(false); throw new Error(d.error||d.message||'İstek başarısız')} return d})})}
+  function api(path,opts){opts=opts||{}; opts.headers=opts.headers||{}; opts.credentials='same-origin'; opts.headers['Content-Type']='application/json'; if(token) opts.headers.Authorization='Bearer '+token; return fetch(path,opts).then(function(r){return r.text().then(function(t){var d={}; try{d=t?JSON.parse(t):{}}catch(e){} if(!r.ok){throw new Error(d.error||d.message||'İstek başarısız')} return d})})}
   function toast(msg){var el=$('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(function(){el.classList.remove('show')},2200)}
   function prettifyUser(u){u=String(u||'Yönetici').trim(); return u?u.charAt(0).toLocaleUpperCase('tr-TR')+u.slice(1):'Yönetici'}
   function loadMe(){var headers={}; if(token) headers.Authorization='Bearer '+token; fetch('/api/admin/me',{headers:headers,credentials:'same-origin'}).then(function(r){return r.ok?r.json():null}).then(function(me){if(!me)return; var name=prettifyUser(me&&me.user&&me.user.username); setText('welcomeUser',name); setText('profileName',name)}).catch(function(){})}
 
   function showApp(){ $('loginPage').classList.add('hidden'); $('app').classList.remove('hidden'); loadMe(); initDateFilters(); setRoute(routeFromPath(),false); loadAll(); }
   function logout(push){token=''; localStorage.removeItem('ruth_admin_token'); try{fetch('/api/admin/logout',{method:'POST',credentials:'same-origin'}).catch(function(){})}catch(e){} $('app').classList.add('hidden'); $('loginPage').classList.remove('hidden'); if(push!==false) history.replaceState(null,'','/admin/'); }
-  on('loginForm','submit',function(e){e.preventDefault(); setText('loginError',''); var btn=document.querySelector('#loginForm button[type="submit"]'); if(btn)btn.disabled=true; api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token||''; if(!token){throw new Error('token alınamadı')} localStorage.setItem('ruth_admin_token',token); location.reload();}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message); if(btn)btn.disabled=false;})});
+  on('loginForm','submit',function(e){e.preventDefault(); setText('loginError',''); var btn=document.querySelector('#loginForm button[type="submit"]'); if(btn)btn.disabled=true; api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token||''; if(!token){throw new Error('token alınamadı')} localStorage.setItem('ruth_admin_token',token); sessionStorage.setItem('ruth_admin_force_open','1'); location.reload();}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message); if(btn)btn.disabled=false;})});
   on('logoutBtn','click',function(){logout()});
   on('collapseBtn','click',function(){ $('app').classList.toggle('nav-mini') });
   on('deskMenuBtn','click',function(){ $('app').classList.toggle('nav-mini') });
@@ -2636,28 +2642,46 @@ function adminHtml() {
   function subscribePush(){ if(!('serviceWorker' in navigator)||!('PushManager' in window)){alert('Bu tarayıcı bildirim desteklemiyor.');return;} api('/api/admin/me').then(function(me){if(!me.vapidPublicKey)throw new Error('VAPID key yok'); return navigator.serviceWorker.register('/sw.js').then(function(reg){return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)})})}).then(function(sub){return api('/api/admin/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub})})}).then(function(){toast('Bildirimler açıldı')}).catch(function(err){alert('Bildirim açılamadı: '+err.message)})}
   function urlBase64ToUint8Array(base64String){var padding='='.repeat((4-base64String.length%4)%4); var base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/'); var raw=atob(base64); var arr=new Uint8Array(raw.length); for(var i=0;i<raw.length;++i)arr[i]=raw.charCodeAt(i); return arr}
   (function bootAuth(){
-    var headers = {};
-    if(token) headers.Authorization = 'Bearer ' + token;
+    var serverAuth = window.__RUTH_SERVER_AUTH__ && window.__RUTH_SERVER_AUTH__.ok;
+    var forceOpen = sessionStorage.getItem('ruth_admin_force_open') === '1';
+
+    function openPanelSafe(){
+      sessionStorage.removeItem('ruth_admin_force_open');
+      try {
+        showApp();
+      } catch (error) {
+        console.error('Panel açılış hatası:', error);
+        $('loginPage').classList.add('hidden');
+        $('app').classList.remove('hidden');
+        var fallbackName = (window.__RUTH_SERVER_AUTH__ && window.__RUTH_SERVER_AUTH__.username) || 'Görkem';
+        setText('welcomeUser', prettifyUser(fallbackName));
+        setText('profileName', prettifyUser(fallbackName));
+        try { toast('Panel açıldı, bazı bölümler yüklenemedi.'); } catch(e) {}
+      }
+    }
+
+    // Eski çözdüğümüz mantık: login başarılıysa reload sonrası paneli direkt aç.
+    // /api/admin/me geç cevap verse veya hata verse bile giriş sayfasına geri düşmesin.
+    if(serverAuth || (forceOpen && token)){
+      openPanelSafe();
+      return;
+    }
+
+    if(!token){
+      $('loginPage').classList.remove('hidden');
+      return;
+    }
+
+    var headers = { Authorization: 'Bearer ' + token };
     fetch('/api/admin/me', { headers: headers, credentials: 'same-origin' })
       .then(function(r){
         if(!r.ok) throw new Error('unauthorized');
         return r.json();
       })
       .then(function(){
-        // ÖNEMLİ: showApp içindeki panel/ikas yükleme hataları auth hatası değildir.
-        // Daha önce panel açılıp tekrar girişe atmasının sebebi buydu:
-        // showApp hata verince .catch çalışıyor, token siliniyordu.
-        try {
-          showApp();
-        } catch (error) {
-          console.error('Panel açılış hatası:', error);
-          $('loginPage').classList.add('hidden');
-          $('app').classList.remove('hidden');
-          setText('welcomeUser', 'Görkem');
-          setText('profileName', 'Görkem');
-          toast('Panel açıldı, bazı bölümler yüklenemedi.');
-        }
-      }, function(){
+        openPanelSafe();
+      })
+      .catch(function(){
         token = '';
         localStorage.removeItem('ruth_admin_token');
         $('loginPage').classList.remove('hidden');
@@ -2696,7 +2720,8 @@ function adminHtml() {
         .then(function(data){
           if(!data.token) throw new Error('token alınamadı');
           localStorage.setItem('ruth_admin_token', data.token);
-          window.location.href = '/admin/';
+          sessionStorage.setItem('ruth_admin_force_open','1');
+          location.reload();
         })
         .catch(function(err){
           if(errEl) errEl.textContent = 'Giriş başarısız: ' + (err && err.message ? err.message : err);
