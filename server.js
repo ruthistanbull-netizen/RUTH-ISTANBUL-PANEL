@@ -486,7 +486,7 @@ async function buildIkasDebug() {
   const orderTests = [
     ["listOrder_minimal", `query { listOrder { data { id orderNumber } } }`],
     ["listOrder_paginated_minimal", `query { listOrder(pagination: { limit: 5, page: 1 }) { count hasNext data { id orderNumber } } }`],
-    ["listOrder_date_fields", `query { listOrder(pagination: { limit: 5, page: 1 }) { data { id orderNumber createdAt updatedAt orderDate orderedAt status orderPackageStatus orderPaymentStatus } } }`]
+    ["listOrder_date_fields", `query { listOrder(pagination: { limit: 5, page: 1 }) { data { id orderNumber createdAt updatedAt orderedAt status orderPackageStatus orderPaymentStatus } } }`]
   ];
   for (const [label, query] of orderTests) result.tests.push(await debugGraphQL(label, query, summarizeFirstDataNode));
 
@@ -494,7 +494,7 @@ async function buildIkasDebug() {
     ["listProduct_minimal", `query { listProduct { data { id name } } }`],
     ["listProduct_paginated_minimal", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name } } }`],
     ["listProduct_category_fields", `query { listProduct(pagination: { limit: 5, page: 1 }) { data { id name categoryIds } } }`],
-    ["listProduct_variant_safe", `query { listProduct(pagination: { limit: 5, page: 1 }) { data { id name variants { id sku barcode stock } } } }`]
+    ["listProduct_variant_safe", `query { listProduct(pagination: { limit: 5, page: 1 }) { data { id name variants { id sku barcodeList variantValues { variantTypeName variantValueName } } } } }`]
   ];
   for (const [label, query] of productTests) result.tests.push(await debugGraphQL(label, query, summarizeFirstDataNode));
 
@@ -732,11 +732,6 @@ async function fetchIkasOrders() {
             id
             sku
             barcodeList
-            name
-            slug
-            productId
-            mainImageId
-            categories { id name }
             variantValues { variantTypeName variantValueName }
           }
         }
@@ -771,9 +766,6 @@ async function fetchIkasOrders() {
           variant {
             id
             sku
-            name
-            productId
-            mainImageId
             variantValues { variantTypeName variantValueName }
           }
         }
@@ -803,7 +795,7 @@ async function fetchIkasOrders() {
           finalPrice
           price
           options { name values { name value } }
-          variant { id sku name }
+          variant { id sku }
         }
       `
     },
@@ -899,10 +891,6 @@ async function fetchIkasProducts(categories = []) {
           id
           sku
           barcodeList
-          isActive
-          weight
-          prices { sellPrice discountPrice }
-          stocks { stockCount stockLocationId }
           variantValues { variantTypeName variantValueName }
         }
       `
@@ -1067,6 +1055,38 @@ function mergeOrderImagesIntoProducts(products, orders) {
   });
 }
 
+
+function enrichOrdersWithProducts(orders, products) {
+  const byVariantId = new Map();
+  const byProductId = new Map();
+  (products || []).forEach((product) => {
+    if (product && product.id) byProductId.set(String(product.id), product);
+    (product.variants || []).forEach((variant) => {
+      if (variant && variant.id) byVariantId.set(String(variant.id), { product, variant });
+    });
+  });
+  return (orders || []).map((order) => {
+    const nextOrder = { ...order };
+    nextOrder.items = (order.items || []).map((item) => {
+      const found = item.variantId ? byVariantId.get(String(item.variantId)) : null;
+      const product = found ? found.product : (item.productId ? byProductId.get(String(item.productId)) : null);
+      if (!product) return item;
+      const baseName = item.baseName && item.baseName !== "Ürün" ? item.baseName : (product.name || item.baseName || "Ürün");
+      return {
+        ...item,
+        productId: item.productId || product.id || "",
+        baseName,
+        name: item.variantText ? `${baseName} — ${item.variantText}` : baseName,
+        image: item.image || product.image || (found && found.variant && found.variant.image) || "",
+        mainImageId: item.mainImageId || product.mainImageId || (found && found.variant && found.variant.mainImageId) || "",
+        categories: item.categories && item.categories.length ? item.categories : (product.categories || []),
+        sku: item.sku || (found && found.variant && found.variant.sku) || ""
+      };
+    });
+    return nextOrder;
+  });
+}
+
 function buildCollectionsFromProducts(products, categories = []) {
   const map = new Map();
   (categories || []).forEach((category) => {
@@ -1141,9 +1161,11 @@ async function buildIkasSummary() {
     products = [];
   }
 
+  orders = enrichOrdersWithProducts(orders, products);
   products = mergeOrderImagesIntoProducts(products, orders);
   await enrichIkasImagesDirectFromProductPages(orders, products, categories);
   await enrichIkasImagesFromStorefront(orders, products, categories);
+  orders = enrichOrdersWithProducts(orders, products);
   products = mergeOrderImagesIntoProducts(products, orders);
   const collections = buildCollectionsFromProducts(products, categories);
   const readyOrders = orders.filter(isReadyOrder).sort(orderNewestFirst);
