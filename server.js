@@ -141,6 +141,64 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, { ok: true });
     }
 
+    if (req.method === "GET" && url.pathname === "/api/ikas/warm-images") {
+      if (!ikasSummaryCache.value && !ikasSummaryInFlight) {
+        buildIkasSummary().catch((error) => console.error("warm images error:", error && error.message ? error.message : error));
+      }
+      return sendJson(res, { ok: true, started: true, message: "Fotoğraf taraması arka planda başladı. 20-30 saniye sonra /api/ikas/image-status.html sayfasını yenile." });
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/ikas/missing-images") {
+      try {
+        const summary = await getFastIkasImageStatusSummary();
+        const products = summary.products || [];
+        const missing = products.filter((p) => !p.image).map((p) => ({
+          id: p.id || "",
+          name: p.name || "",
+          categoryNames: p.categoryNames || [],
+          slugGuess: slugifyForUrl(p.name || ""),
+          candidateUrl: p.name ? new URL("/" + slugifyForUrl(p.name), IKAS_STOREFRONT_URL).toString() : ""
+        }));
+        return sendJson(res, {
+          ok: true,
+          public: true,
+          busy: Boolean(summary.__busy),
+          totalProducts: products.length,
+          productsWithImage: products.filter((p) => p.image).length,
+          missingCount: missing.length,
+          missing,
+          note: summary.__busy
+            ? "Fotoğraf taraması devam ediyor. Biraz sonra yenile."
+            : "Bu listedeki ürünlerde fotoğraf eşleşmesi bulunamadı."
+        });
+      } catch (error) {
+        return sendJson(res, {
+          ok: false,
+          public: true,
+          error: error && error.message ? error.message : "missing_images_error"
+        }, 500);
+      }
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/ikas/missing-images.html") {
+      try {
+        const summary = await getFastIkasImageStatusSummary();
+        const products = summary.products || [];
+        const missing = products.filter((p) => !p.image);
+        const withImage = products.filter((p) => p.image).length;
+        const rows = missing.map((p, index) => {
+          const slug = slugifyForUrl(p.name || "");
+          const candidate = p.name ? new URL("/" + slug, IKAS_STOREFRONT_URL).toString() : "";
+          const cats = (p.categoryNames || []).join(", ");
+          return `<tr><td>${index + 1}</td><td>${escapeHtmlServer(p.name || "")}</td><td>${escapeHtmlServer(cats || "-")}</td><td>${escapeHtmlServer(slug)}</td><td style="word-break:break-all">${candidate ? `<a href="${escapeHtmlServer(candidate)}" target="_blank">${escapeHtmlServer(candidate)}</a>` : "-"}</td></tr>`;
+        }).join("");
+        const busy = summary.__busy ? `<p class="warn">Fotoğraf taraması devam ediyor. 20-30 saniye sonra yenile.</p>` : "";
+        return sendHtml(res, `<!doctype html><html><head><meta charset="utf-8"><title>Ruth Eksik Fotoğraflar</title>${summary.__busy ? '<meta http-equiv="refresh" content="8">' : ''}<style>body{background:#0b0b0c;color:#f4ead8;font-family:Arial;padding:24px}a{color:#f1c76a}table{width:100%;border-collapse:collapse;margin-top:16px}td,th{border-bottom:1px solid #333;padding:10px;text-align:left;vertical-align:top}.ok{color:#f1c76a}.warn{color:#f1c76a;background:#15120b;border:1px solid #3a3325;padding:10px 14px;border-radius:12px;display:inline-block}.muted{color:#a99f8d}.card{display:inline-block;border:1px solid #3a3325;background:#15120b;border-radius:12px;padding:10px 14px;margin:8px 0}</style></head><body><h1>RUTH IKAS Fotoğrafsız Ürünler</h1>${busy}<div class="card"><p class="ok">Toplam ürün: ${products.length}</p><p class="ok">Fotoğraflı: ${withImage}</p><p class="ok">Fotoğrafsız: ${missing.length}</p><p class="muted">Bu listedeki ürünlerde eşleşen fotoğraf bulunamadı. Aday URL sütunu ürün adıyla tahmini sayfayı gösterir.</p></div><table><thead><tr><th>#</th><th>Ürün</th><th>Kategori</th><th>Slug tahmini</th><th>Aday URL</th></tr></thead><tbody>${rows || '<tr><td colspan="5">Fotoğrafsız ürün yok.</td></tr>'}</tbody></table></body></html>`);
+      } catch (error) {
+        return sendHtml(res, `<!doctype html><html><body><pre>${escapeHtmlServer(error && error.message ? error.message : "missing_images_error")}</pre></body></html>`, 500);
+      }
+    }
+
     if (req.method === "GET" && url.pathname === "/api/ikas/image-status") {
       try {
         const summary = await getFastIkasImageStatusSummary();
@@ -161,7 +219,7 @@ const server = http.createServer(async (req, res) => {
         const withImage = products.filter((p) => p.image).length;
         const rows = products.slice(0, 30).map((p) => `<tr><td>${escapeHtmlServer(p.name || "")}</td><td>${p.image ? `<img src="${escapeHtmlServer(p.image)}" style="width:54px;height:54px;object-fit:cover;border-radius:10px">` : "Yok"}</td><td style="word-break:break-all">${escapeHtmlServer(p.image || "")}</td></tr>`).join("");
         const busy = summary.__busy ? `<p style="color:#f1c76a">Fotoğraf taraması devam ediyor. 20-30 saniye sonra yenile.</p>` : "";
-        return sendHtml(res, `<!doctype html><html><head><meta charset="utf-8"><title>Ruth Image Status</title><style>body{background:#0b0b0c;color:#f4ead8;font-family:Arial;padding:24px}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #333;padding:10px;text-align:left}img{background:#222}.ok{color:#f1c76a}</style></head><body><h1>RUTH IKAS Fotoğraf Durumu</h1>${busy}<p class="ok">Ürün: ${products.length} / Fotoğraflı: ${withImage}</p><p>Sipariş: ${(summary.orders || []).length}</p><table><thead><tr><th>Ürün</th><th>Foto</th><th>URL</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
+        return sendHtml(res, `<!doctype html><html><head><meta charset="utf-8"><title>Ruth Image Status</title>${summary.__busy ? '<meta http-equiv="refresh" content="8">' : ''}<style>body{background:#0b0b0c;color:#f4ead8;font-family:Arial;padding:24px}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #333;padding:10px;text-align:left}img{background:#222}.ok{color:#f1c76a}.muted{color:#a99f8d}.box{display:inline-block;border:1px solid #3a3325;background:#15120b;border-radius:12px;padding:10px 14px;margin:8px 0}</style></head><body><h1>RUTH IKAS Fotoğraf Durumu</h1>${busy}<div class="box"><p class="ok">Ürün: ${products.length} / Fotoğraflı: ${withImage}</p><p>Sipariş: ${(summary.orders || []).length}</p><p class="muted">${summary.__busy ? 'Bu sayfa 8 saniyede bir kendi yenilenir.' : 'Tarama tamamlandı.'}</p></div><table><thead><tr><th>Ürün</th><th>Foto</th><th>URL</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
       } catch (error) {
         return sendHtml(res, `<!doctype html><html><body><pre>${escapeHtmlServer(error && error.message ? error.message : "image_status_error")}</pre></body></html>`, 500);
       }
@@ -2958,7 +3016,7 @@ function readJson(req, limit = 1_000_000) {
 async function getFastIkasImageStatusSummary() {
   if (ikasSummaryCache.value) return ikasSummaryCache.value;
 
-  const timeoutMs = Math.max(1000, Math.min(6000, Number(process.env.IKAS_IMAGE_STATUS_TIMEOUT_MS || 2500)));
+  const timeoutMs = Math.max(1000, Math.min(6000, Number(process.env.IKAS_IMAGE_STATUS_TIMEOUT_MS || 4500)));
   try {
     return await Promise.race([
       buildIkasSummary(),
