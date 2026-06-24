@@ -3134,6 +3134,58 @@ function adminHtml(serverAdmin) {
   }
 }
 
+
+
+/* Mobile top safe-area fix */
+@media(max-width:820px){
+  html{
+    background:#0b0a08 !important;
+  }
+  body{
+    background:
+      radial-gradient(circle at 82% -30px,rgba(212,162,55,.16),transparent 240px),
+      linear-gradient(180deg,#0b0a08 0%,#050607 280px,#050607 100%) !important;
+    min-height:100dvh;
+  }
+  body:after{
+    content:"";
+    position:fixed;
+    left:0;
+    right:0;
+    top:0;
+    height:calc(env(safe-area-inset-top,0px) + 18px);
+    background:
+      radial-gradient(circle at 84% -24px,rgba(212,162,55,.18),transparent 230px),
+      linear-gradient(180deg,#0b0a08 0%,#070708 100%);
+    z-index:18;
+    pointer-events:none;
+  }
+  .main{
+    padding-top:calc(env(safe-area-inset-top,0px) + 12px) !important;
+    background:transparent !important;
+  }
+  .topbar{
+    position:relative;
+    z-index:20;
+    margin-top:0 !important;
+    border-top:1px solid rgba(212,162,55,.06);
+    background:rgba(7,8,10,.86) !important;
+    backdrop-filter:blur(18px) saturate(140%) !important;
+  }
+  .content{
+    padding-top:18px !important;
+  }
+  .sidebar{
+    padding-top:calc(env(safe-area-inset-top,0px) + 8px) !important;
+    background:
+      radial-gradient(circle at 70% 0%,rgba(212,162,55,.09),transparent 220px),
+      linear-gradient(180deg,#0b0a08,#050607) !important;
+  }
+  .app.mobile-open .sidebar{
+    top:0 !important;
+  }
+}
+
 </style>
 </head>
 <body>
