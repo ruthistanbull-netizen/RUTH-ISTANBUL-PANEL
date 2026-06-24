@@ -618,34 +618,70 @@ async function fetchIkasCategories() {
 async function fetchIkasProducts(categories = []) {
   if (!ikasConfigured()) return [];
   const categoryMap = new Map((categories || []).map((category) => [String(category.id), category]));
-
-  const safeFields = `
-    id
-    name
-    createdAt
-    updatedAt
-    totalStock
-    categoryIds
-    categories { id name }
-    variants {
-      id
-      name
-      sku
-      barcodeList
-      mainImageId
-      productId
-      variantValues { variantTypeName variantValueName }
-    }
-  `;
-
   const normalize = (rows) => normalizeIkasProducts(rows, categoryMap);
-  return fetchIkasPaginatedList({
-    label: "ikas products",
-    rootField: "listProduct",
-    fields: safeFields,
-    normalize,
-    maxPages: 120
-  });
+
+  // ikas mağaza şemasında Variant tipinde name/mainImageId/productId alanları yok.
+  // Bu yüzden ürün sorgusunu en güvenli alanlardan başlayarak fallback'li çalıştırıyoruz.
+  const attempts = [
+    {
+      label: "ikas products safe",
+      fields: `
+        id
+        name
+        createdAt
+        updatedAt
+        totalStock
+        categoryIds
+        variants {
+          id
+          sku
+          barcodeList
+          variantValues { variantTypeName variantValueName }
+        }
+      `
+    },
+    {
+      label: "ikas products minimal variants",
+      fields: `
+        id
+        name
+        createdAt
+        updatedAt
+        categoryIds
+        variants {
+          id
+          sku
+        }
+      `
+    },
+    {
+      label: "ikas products bare",
+      fields: `
+        id
+        name
+        categoryIds
+      `
+    }
+  ];
+
+  const errors = [];
+  for (const attempt of attempts) {
+    try {
+      const products = await fetchIkasPaginatedList({
+        label: attempt.label,
+        rootField: "listProduct",
+        fields: attempt.fields,
+        normalize,
+        maxPages: 120
+      });
+      if (Array.isArray(products)) return products;
+    } catch (error) {
+      errors.push(`${attempt.label}: ${error && error.message ? error.message : String(error)}`);
+    }
+  }
+
+  console.error("ikas products error:", errors.join(" || ").slice(0, 1600));
+  return [];
 }
 
 function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
