@@ -411,10 +411,14 @@ async function handleAdminApi(req, res, url) {
         ok: true,
         connected: false,
         ikasError: error && error.message ? error.message : "ikas_error",
-        totals: { orders: 0, units: 0, readyOrders: 0, readyUnits: 0, deliveredOrders: 0, revenue: 0 },
+        totals: { orders: 0, units: 0, readyOrders: 0, readyUnits: 0, deliveredOrders: 0, revenue: 0, products: 0, collections: 0 },
         productTotals: [],
+        readyProductTotals: [],
         orders: [],
+        readyOrders: [],
         deliveredOrders: [],
+        products: [],
+        collections: [],
         message: "ikas bağlantısı kurulamadı. Render Environment Variables içindeki IKAS_STORE_NAME / IKAS_CLIENT_ID / IKAS_CLIENT_SECRET değerlerini kontrol et."
       });
     }
@@ -562,22 +566,189 @@ async function fetchIkasOrders() {
   return normalizeIkasOrders(rawOrders);
 }
 
+async function fetchIkasProducts() {
+  if (!ikasConfigured()) return [];
+  const richQuery = `
+    query RuthListProducts {
+      listProduct(sort: "updatedAt:desc", pagination: { page: 0, limit: 250 }) {
+        data {
+          id
+          name
+          createdAt
+          updatedAt
+          totalStock
+          categories { id name imageId }
+          variants {
+            id
+            name
+            sku
+            barcodeList
+            mainImageId
+            productId
+            variantValues {
+              variantTypeName
+              variantValueName
+            }
+          }
+        }
+      }
+    }
+  `;
+  const fallbackQuery = `
+    query RuthListProductsFallback {
+      listProduct(sort: "updatedAt:desc", pagination: { page: 0, limit: 250 }) {
+        data {
+          id
+          name
+          createdAt
+          updatedAt
+          totalStock
+          categories { id name imageId }
+          variants { id name sku }
+        }
+      }
+    }
+  `;
+
+  let data;
+  try {
+    data = await ikasGraphQL(richQuery);
+  } catch (error) {
+    console.error("ikas products rich query fallback:", error && error.message ? error.message : error);
+    data = await ikasGraphQL(fallbackQuery);
+  }
+  const rawProducts = data && data.listProduct && Array.isArray(data.listProduct.data) ? data.listProduct.data : [];
+  return normalizeIkasProducts(rawProducts);
+}
+
+function normalizeIkasProducts(rawProducts) {
+  return rawProducts.map((product) => {
+    const variants = Array.isArray(product.variants) ? product.variants.map((variant) => {
+      const variantText = Array.isArray(variant.variantValues)
+        ? variant.variantValues.map((value) => {
+            const left = valueOrEmpty(value.variantTypeName);
+            const right = valueOrEmpty(value.variantValueName);
+            return right ? (left ? `${left}: ${right}` : right) : "";
+          }).filter(Boolean).join(" / ")
+        : "";
+      const mainImageId = valueOrEmpty(variant.mainImageId);
+      return {
+        id: valueOrEmpty(variant.id),
+        name: valueOrEmpty(variant.name) || valueOrEmpty(product.name) || "Ürün",
+        sku: valueOrEmpty(variant.sku),
+        barcode: Array.isArray(variant.barcodeList) ? variant.barcodeList.join(", ") : "",
+        mainImageId,
+        image: buildIkasImageUrl(mainImageId),
+        variantText
+      };
+    }) : [];
+    const categories = Array.isArray(product.categories) ? product.categories.map((category) => ({
+      id: valueOrEmpty(category.id),
+      name: valueOrEmpty(category.name),
+      imageId: valueOrEmpty(category.imageId),
+      image: buildIkasImageUrl(category.imageId)
+    })).filter((category) => category.id || category.name) : [];
+    const image = variants.find((variant) => variant.image)?.image || "";
+    const mainImageId = variants.find((variant) => variant.mainImageId)?.mainImageId || "";
+    return {
+      id: valueOrEmpty(product.id),
+      name: valueOrEmpty(product.name) || "Ürün",
+      image,
+      mainImageId,
+      totalStock: Number(product.totalStock || 0),
+      categories,
+      categoryNames: categories.map((category) => category.name).filter(Boolean),
+      variants,
+      variantCount: variants.length,
+      createdAt: normalizeIkasDate(product.createdAt),
+      updatedAt: normalizeIkasDate(product.updatedAt)
+    };
+  }).sort((a, b) => String(b.updatedAt || b.createdAt || "").localeCompare(String(a.updatedAt || a.createdAt || "")) || String(a.name || "").localeCompare(String(b.name || ""), "tr"));
+}
+
+function mergeOrderImagesIntoProducts(products, orders) {
+  const byProductId = new Map();
+  const byVariantId = new Map();
+  orders.forEach((order) => {
+    (order.items || []).forEach((item) => {
+      if (item.productId && (item.image || item.mainImageId)) byProductId.set(item.productId, { image: item.image, mainImageId: item.mainImageId });
+      if (item.variantId && (item.image || item.mainImageId)) byVariantId.set(item.variantId, { image: item.image, mainImageId: item.mainImageId });
+    });
+  });
+  return products.map((product) => {
+    let next = { ...product };
+    const fromProduct = byProductId.get(product.id);
+    if (!next.image && fromProduct) {
+      next.image = fromProduct.image || buildIkasImageUrl(fromProduct.mainImageId);
+      next.mainImageId = next.mainImageId || fromProduct.mainImageId || "";
+    }
+    next.variants = (next.variants || []).map((variant) => {
+      const fromVariant = byVariantId.get(variant.id);
+      if (!variant.image && fromVariant) return { ...variant, image: fromVariant.image || buildIkasImageUrl(fromVariant.mainImageId), mainImageId: variant.mainImageId || fromVariant.mainImageId || "" };
+      return variant;
+    });
+    if (!next.image) next.image = (next.variants || []).find((variant) => variant.image)?.image || "";
+    return next;
+  });
+}
+
+function buildCollectionsFromProducts(products) {
+  const map = new Map();
+  products.forEach((product) => {
+    const categories = product.categories && product.categories.length ? product.categories : [{ id: "uncategorized", name: "Koleksiyonsuz", image: "", imageId: "" }];
+    categories.forEach((category) => {
+      const key = category.id || category.name || "uncategorized";
+      const existing = map.get(key) || {
+        id: key,
+        name: category.name || "Koleksiyonsuz",
+        image: category.image || product.image || "",
+        imageId: category.imageId || "",
+        productCount: 0,
+        products: []
+      };
+      existing.productCount += 1;
+      existing.products.push({ id: product.id, name: product.name, image: product.image, totalStock: product.totalStock });
+      if (!existing.image && product.image) existing.image = product.image;
+      map.set(key, existing);
+    });
+  });
+  return [...map.values()].sort((a, b) => Number(b.productCount || 0) - Number(a.productCount || 0) || String(a.name).localeCompare(String(b.name), "tr"));
+}
+
 async function buildIkasSummary() {
   if (!ikasConfigured()) {
     return {
       connected: false,
-      totals: { orders: 0, units: 0, readyOrders: 0, readyUnits: 0, deliveredOrders: 0, revenue: 0 },
+      totals: { orders: 0, units: 0, readyOrders: 0, readyUnits: 0, deliveredOrders: 0, revenue: 0, products: 0, collections: 0 },
       productTotals: [],
+      readyProductTotals: [],
       orders: [],
+      readyOrders: [],
       deliveredOrders: [],
+      products: [],
+      collections: [],
       message: "ikas env değerleri bekleniyor."
     };
   }
 
-  const orders = await fetchIkasOrders();
+  let orders = [];
+  let products = [];
+  let productError = "";
+
+  orders = await fetchIkasOrders();
+  try {
+    products = await fetchIkasProducts();
+  } catch (error) {
+    productError = error && error.message ? error.message : "ürünler çekilemedi";
+    console.error("ikas products error:", productError);
+    products = [];
+  }
+
+  products = mergeOrderImagesIntoProducts(products, orders);
+  const collections = buildCollectionsFromProducts(products);
   const readyOrders = orders.filter(isReadyOrder);
   const deliveredOrders = orders.filter(isDeliveredOrder);
-  const productTotals = buildReadyProductTotals(readyOrders);
+  const readyProductTotals = buildReadyProductTotals(readyOrders);
   const units = orders.reduce((sum, order) => sum + order.items.reduce((s, item) => s + Number(item.quantity || 0), 0), 0);
   const readyUnits = readyOrders.reduce((sum, order) => sum + order.items.reduce((s, item) => s + Number(item.quantity || 0), 0), 0);
   const revenue = orders.reduce((sum, order) => sum + Number(order.total || 0), 0);
@@ -585,17 +756,24 @@ async function buildIkasSummary() {
   return {
     connected: true,
     updatedAt: new Date().toISOString(),
+    productError,
     totals: {
       orders: orders.length,
       units,
       readyOrders: readyOrders.length,
       readyUnits,
       deliveredOrders: deliveredOrders.length,
-      revenue
+      revenue,
+      products: products.length,
+      collections: collections.length
     },
-    productTotals,
+    productTotals: readyProductTotals,
+    readyProductTotals,
     orders,
-    deliveredOrders
+    readyOrders,
+    deliveredOrders,
+    products,
+    collections
   };
 }
 
@@ -687,6 +865,7 @@ function buildVariantText(item, variant) {
 function buildIkasImageUrl(mainImageId) {
   const id = valueOrEmpty(mainImageId);
   if (!id) return "";
+  if (/^https?:\/\//i.test(id)) return id;
   const base = String(process.env.IKAS_IMAGE_BASE_URL || "").trim().replace(/\/+$/, "");
   if (base) return `${base}/${encodeURIComponent(id)}`;
   return "";
@@ -1214,6 +1393,7 @@ function adminHtml() {
     .input,.textarea{width:100%;border:1px solid var(--line);border-radius:12px;background:#090a0c;color:var(--text);outline:none;padding:12px 13px;transition:border .18s,box-shadow .18s,background .18s}.textarea{resize:none;min-height:88px;max-height:180px}.input:focus,.textarea:focus{border-color:rgba(212,162,55,.62);box-shadow:0 0 0 4px rgba(212,162,55,.10);background:#0f1012}.error{min-height:20px;color:#ffaaa4;font-size:13px;margin-top:8px}
     .app{height:100dvh;display:grid;grid-template-columns:var(--sidebar-w) minmax(0,1fr);background:transparent}.app.nav-mini{--sidebar-w:78px}.sidebar{display:grid;grid-template-rows:var(--top-h) 1fr auto;min-width:0;background:linear-gradient(180deg,rgba(12,13,15,.96),rgba(6,7,8,.96));border-right:1px solid var(--line);z-index:40;transition:transform .2s, width .2s}.side-head{height:var(--top-h);display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid var(--line)}.app.nav-mini .side-head{justify-content:center;padding:0}.app.nav-mini .brand-copy,.app.nav-mini .nav-label,.app.nav-mini .nav-badge,.app.nav-mini .nav-heading,.app.nav-mini .side-foot span{display:none}.app.nav-mini .nav-item{justify-content:center;padding:12px}.nav{overflow:auto;padding:12px 10px}.nav-heading{padding:18px 10px 8px;color:#7d7569;font-size:12px;letter-spacing:.11em;text-transform:uppercase;font-weight:720}.nav-item{width:100%;border:1px solid transparent;border-radius:8px;background:transparent;color:#d6d1c8;display:flex;align-items:center;gap:12px;padding:12px 14px;text-decoration:none;font-weight:620;letter-spacing:-.01em;transition:background .15s,border-color .15s,transform .15s,color .15s}.nav-item:hover{background:rgba(255,255,255,.045);border-color:var(--line);transform:translateX(2px);color:#fff}.nav-item.active{background:linear-gradient(90deg,rgba(212,162,55,.18),rgba(212,162,55,.06));border-color:rgba(212,162,55,.22);color:#fff}.nav-ico{width:20px;height:20px;display:grid;place-items:center;color:var(--gold-2);flex:0 0 auto}.nav-ico svg{width:19px;height:19px;stroke:currentColor;fill:none;stroke-width:1.9}.nav-badge{margin-left:auto;min-width:28px;height:22px;border-radius:999px;background:#f0c66b;color:#100b04;display:grid;place-items:center;font-size:12px;font-weight:850;padding:0 7px}.side-foot{border-top:1px solid var(--line);padding:12px;display:grid;gap:8px}.main{display:grid;grid-template-rows:var(--top-h) minmax(0,1fr);min-width:0}.topbar{height:var(--top-h);display:flex;align-items:center;justify-content:space-between;gap:14px;border-bottom:1px solid var(--line);background:rgba(7,8,10,.78);backdrop-filter:blur(18px);padding:0 22px;z-index:20}.top-left{display:flex;align-items:center;gap:14px}.crumb-title{font-size:15px;font-weight:730}.top-actions{display:flex;align-items:center;gap:12px}.top-icon{width:38px;height:38px;border:0;background:transparent;border-radius:10px;color:#d5cec2;display:grid;place-items:center;position:relative}.top-icon:hover{background:rgba(255,255,255,.05)}.top-dot{position:absolute;right:4px;top:3px;min-width:18px;height:18px;border-radius:999px;background:#f0c66b;color:#0c0803;font-size:11px;font-weight:850;display:grid;place-items:center}.profile{display:flex;align-items:center;gap:12px;min-width:0}.avatar{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;border:1px solid rgba(212,162,55,.50);background:#08090b;color:var(--gold-2);font:700 25px Georgia,"Times New Roman",serif}.profile-name{font-weight:760}.profile-role{font-size:12px;color:var(--muted)}.mobile-menu{display:none}.icon-btn,.btn{border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.032);color:var(--text);display:inline-flex;align-items:center;justify-content:center;gap:8px;font-weight:700;transition:transform .16s,border-color .16s,background .16s,box-shadow .16s}.icon-btn{width:38px;height:38px;padding:0}.btn{padding:10px 14px}.btn:hover,.icon-btn:hover{transform:translateY(-1px);border-color:rgba(212,162,55,.36);background:rgba(255,255,255,.055);box-shadow:0 12px 28px rgba(0,0,0,.18)}.btn.gold{background:linear-gradient(180deg,#efc86b,#b9862a);border-color:#c99737;color:#130c03}.btn.ghost{background:transparent}.btn.full{width:100%}.btn:disabled{opacity:.55;cursor:not-allowed;transform:none;box-shadow:none}.content{overflow:auto;padding:20px 24px 26px}.page{display:none;animation:fade .18s ease both}.page.active{display:block}.layout-overview{display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:18px}.welcome{height:122px;border:1px solid var(--line);border-radius:8px;background:linear-gradient(135deg,rgba(255,255,255,.045),rgba(255,255,255,.015));display:flex;align-items:center;justify-content:space-between;padding:24px 28px;margin-bottom:18px;box-shadow:0 18px 45px rgba(0,0,0,.18)}.welcome h1{margin:0 0 10px;font-size:28px;line-height:1.05;letter-spacing:-.046em;font-weight:780}.welcome p{margin:0;color:var(--muted)}.date-pill{border:1px solid var(--line);border-radius:8px;background:#0c0d0f;padding:12px 16px;color:#f0eee8;min-width:178px;display:flex;align-items:center;justify-content:space-between}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-bottom:16px}.metric{height:126px;border:1px solid var(--line);border-radius:8px;background:linear-gradient(180deg,rgba(255,255,255,.045),rgba(255,255,255,.015));padding:18px 18px;position:relative;overflow:hidden}.metric:after{content:"";position:absolute;right:16px;bottom:15px;width:58px;height:24px;border-bottom:2px solid var(--gold);border-right:2px solid var(--gold);transform:skew(-32deg) rotate(-10deg);opacity:.9}.metric-row{display:flex;align-items:center;gap:14px}.metric-ico,.module-ico{width:46px;height:46px;border-radius:50%;display:grid;place-items:center;background:rgba(212,162,55,.14);border:1px solid rgba(212,162,55,.20);color:var(--gold-2)}.metric-label{color:#bdb6ab;font-size:13px;margin-bottom:4px}.metric-num{font-size:27px;font-weight:780;letter-spacing:-.035em}.metric-sub{margin-top:10px;color:#c4beb4;font-size:13px}.modules{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin-bottom:16px}.module{min-height:220px;border:1px solid rgba(212,162,55,.22);border-radius:8px;background:radial-gradient(circle at 50% 0%,rgba(212,162,55,.08),transparent 38%),linear-gradient(180deg,rgba(255,255,255,.035),rgba(255,255,255,.012));display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:26px;transition:transform .16s,border-color .16s,box-shadow .16s}.module:hover{transform:translateY(-3px);border-color:rgba(212,162,55,.50);box-shadow:0 22px 60px rgba(0,0,0,.25)}.module h3{margin:15px 0 9px;font-size:17px;letter-spacing:.01em}.module p{margin:0;color:#d5cec4;line-height:1.55}.module .btn{margin-top:20px;min-width:184px}.bottom-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px}.card{border:1px solid var(--line);border-radius:8px;background:rgba(15,16,19,.82);padding:18px;min-width:0}.card-title{font-size:16px;font-weight:780;margin-bottom:14px}.list{display:grid;gap:10px}.mini-row,.conversation,.customer-row,.product-row,.order-row,.quick-row,.note{border:1px solid transparent;border-radius:8px;padding:10px 12px;background:rgba(255,255,255,.018)}.conversation,.customer-row{cursor:pointer}.conversation:hover,.customer-row:hover,.quick-row:hover{background:rgba(255,255,255,.04);border-color:var(--line)}.conversation.active,.customer-row.active{border-color:rgba(212,162,55,.30);background:rgba(212,162,55,.10)}.row{display:flex;align-items:center;justify-content:space-between;gap:10px}.name{font-weight:730;color:#f4f0e9}.preview{font-size:12px;color:var(--muted);margin-top:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.time{font-size:12px;color:var(--muted)}.badge{display:inline-grid;place-items:center;min-width:22px;height:22px;border-radius:999px;background:#f0c66b;color:#100b04;font-size:12px;font-weight:850;padding:0 7px}.empty{color:var(--muted);padding:18px;text-align:center}.right-rail{display:grid;gap:14px;align-content:start}.quick-row{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;padding:14px}.quick-left{display:flex;align-items:center;gap:12px}.rail-product{display:grid;grid-template-columns:48px minmax(0,1fr);gap:12px;align-items:center}.prod-img{width:48px;height:48px;border-radius:6px;background:linear-gradient(135deg,#2b2d31,#111215);border:1px solid var(--line);display:grid;place-items:center;color:var(--gold-2);overflow:hidden}.prod-img img{width:100%;height:100%;object-fit:cover}.page-head{display:flex;align-items:center;justify-content:space-between;gap:14px;margin-bottom:16px}.page-title{font-size:27px;line-height:1.1;letter-spacing:-.045em;font-weight:780}.page-sub{color:var(--muted);margin-top:6px}.support-grid{display:grid;grid-template-columns:330px minmax(0,1fr) 300px;gap:14px;height:calc(100dvh - 128px)}.crm-grid{display:grid;grid-template-columns:360px minmax(0,1fr);gap:14px;height:calc(100dvh - 128px)}.orders-grid{display:grid;grid-template-columns:minmax(0,1.2fr) minmax(360px,.8fr);gap:14px}.panel{border:1px solid var(--line);border-radius:8px;background:rgba(15,16,19,.82);min-width:0;overflow:hidden;display:flex;flex-direction:column}.panel-head{padding:16px 17px;border-bottom:1px solid var(--line);display:flex;align-items:center;justify-content:space-between;gap:12px}.panel-title{font-weight:780}.panel-body{padding:14px;overflow:auto;min-height:0}.message-space{flex:1;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:12px}.msg{max-width:72%;border:1px solid var(--line);border-radius:12px;padding:11px 12px;line-height:1.45;background:#17191d;color:#f4f0ea}.msg.admin{align-self:flex-end;background:linear-gradient(180deg,#d9ac4a,#b88227);color:#100b03;border-color:#c49133}.msg.customer,.msg.system{align-self:flex-start}.msg img{display:block;max-width:240px;border-radius:9px;margin-top:8px}.meta{font-size:11px;opacity:.65;margin-top:7px}.composer{border-top:1px solid var(--line);padding:14px;display:grid;grid-template-columns:1fr auto;gap:10px}.info-line{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line-soft);padding:12px 0;gap:12px}.info-line span:first-child{color:var(--muted)}.note.done{opacity:.58}.note-body{line-height:1.45}.note-meta{font-size:12px;color:var(--muted);margin-top:8px}.product-row,.order-row{display:grid;grid-template-columns:54px minmax(0,1fr) auto;gap:12px;align-items:center;padding:13px}.qty{font-size:22px;font-weight:780;color:var(--gold-2)}.footer-logo{margin:22px 0 4px;text-align:center;color:#7a5f27;font-family:Georgia,"Times New Roman",serif;letter-spacing:.25em}.toast{position:fixed;right:24px;bottom:24px;padding:12px 14px;border-radius:10px;border:1px solid rgba(212,162,55,.25);background:#121317;color:#fff;box-shadow:var(--shadow);z-index:80;opacity:0;transform:translateY(12px);transition:opacity .18s,transform .18s}.toast.show{opacity:1;transform:translateY(0)}.drawer-shade{display:none}
     @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}@keyframes rise{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+    .product-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:12px}.product-card,.collection-card{border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.022);padding:13px;display:grid;grid-template-columns:64px minmax(0,1fr);gap:12px;align-items:center}.product-card:hover,.collection-card:hover{border-color:rgba(212,162,55,.35);background:rgba(255,255,255,.04)}.prod-img.large{width:64px;height:64px;border-radius:8px}.chips{display:flex;flex-wrap:wrap;gap:6px;margin-top:7px}.chip{font-size:11px;border:1px solid var(--line);border-radius:999px;padding:3px 7px;color:#cfc7ba;background:rgba(255,255,255,.025)}.order-card{border:1px solid var(--line);border-radius:10px;background:rgba(255,255,255,.022);padding:14px;margin-bottom:10px}.order-products{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:8px;margin-top:10px}.order-product{display:grid;grid-template-columns:44px minmax(0,1fr) auto;gap:9px;align-items:center;border:1px solid var(--line-soft);border-radius:8px;padding:8px;background:rgba(255,255,255,.018)}
     @media(max-width:1180px){.layout-overview{grid-template-columns:1fr}.right-rail{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(2,1fr)}.modules,.bottom-grid{grid-template-columns:1fr}.support-grid,.crm-grid,.orders-grid{grid-template-columns:1fr;height:auto}.panel{min-height:360px}}
     @media(max-width:820px){body{overflow:auto}.app{display:block;height:auto;min-height:100dvh}.sidebar{position:fixed;left:0;top:0;bottom:0;width:286px;transform:translateX(-104%);box-shadow:var(--shadow)}.app.mobile-open .sidebar{transform:translateX(0)}.drawer-shade{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:35}.app.mobile-open .drawer-shade{display:block}.main{min-height:100dvh}.topbar{padding:0 14px}.mobile-menu{display:grid}.top-actions .top-icon:nth-child(1),.profile-copy{display:none}.content{padding:14px}.welcome{height:auto;display:block;padding:20px}.date-pill{margin-top:16px;width:100%}.metrics{grid-template-columns:1fr}.right-rail{grid-template-columns:1fr}.support-grid,.crm-grid{gap:12px}.modules{gap:12px}.module{min-height:170px}.bottom-grid{gap:12px}.message-space{min-height:360px}.msg{max-width:88%}}
   </style>
@@ -1247,6 +1427,11 @@ function adminHtml() {
         <button class="nav-item" data-route="products"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="m21 8-9-5-9 5 9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span><span class="nav-label">Ürünler</span></button>
         <div class="nav-heading">ENTEGRASYON</div>
         <button class="nav-item" data-route="integration"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1"/></svg></span><span class="nav-label">ikas Entegrasyonu</span></button>
+        <button class="nav-item" data-route="ikas-orders"><span class="nav-ico">↳</span><span class="nav-label">Tüm Siparişler</span></button>
+        <button class="nav-item" data-route="ikas-products"><span class="nav-ico">↳</span><span class="nav-label">Tüm Ürünler</span></button>
+        <button class="nav-item" data-route="ikas-collections"><span class="nav-ico">↳</span><span class="nav-label">Tüm Koleksiyonlar</span></button>
+        <button class="nav-item" data-route="ikas-ready-orders"><span class="nav-ico">↳</span><span class="nav-label">Hazırlanacak Siparişler</span><span id="badgeReadyOrders" class="nav-badge">0</span></button>
+        <button class="nav-item" data-route="ikas-ready-products"><span class="nav-ico">↳</span><span class="nav-label">Hazırlanacak Ürün Toplamları</span></button>
         <div class="nav-heading">DİĞER</div>
         <button class="nav-item" data-route="reports"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></svg></span><span class="nav-label">Raporlar</span></button>
         <button class="nav-item" data-route="settings"><span class="nav-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.1 2.1-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V20h-3v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1L6.6 16.7l.1-.1A1.7 1.7 0 0 0 7 14.7a1.7 1.7 0 0 0-1.5-1H5v-3h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 2.1-2.1.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V4h3v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 2.1 2.1-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1v3h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span><span class="nav-label">Ayarlar</span></button>
@@ -1300,12 +1485,29 @@ function adminHtml() {
         </div>
 
         <div id="page-orders" class="page">
-          <div class="page-head"><div><div class="page-title">Siparişler</div><div class="page-sub">ikas API ile gelen sipariş ürün toplamları burada görünecek.</div></div><button id="syncOrders" class="btn gold">Siparişleri Senkronize Et</button></div>
+          <div class="page-head"><div><div class="page-title">Siparişler</div><div class="page-sub">ikas'tan gelen tüm siparişler, hazırlanacak ürünler ve teslim edilenler.</div></div><button id="syncOrders" class="btn gold">Siparişleri Senkronize Et</button></div>
           <div class="metrics"><div class="metric"><div class="metric-label">Toplam Sipariş</div><div id="ordersTotal" class="metric-num">0</div></div><div class="metric"><div class="metric-label">Toplam Ürün Adedi</div><div id="unitsTotal" class="metric-num">0</div></div><div class="metric"><div class="metric-label">Ürün Çeşidi</div><div id="productKinds" class="metric-num">0</div></div><div class="metric"><div class="metric-label">ikas Durumu</div><div id="ikasStatus" class="metric-num" style="font-size:22px">Bekliyor</div></div></div>
           <div class="orders-grid"><div class="panel"><div class="panel-head"><div class="panel-title">Hazırlanacak Ürün Toplamları</div><span class="badge" id="readyOrdersBadge">0</span></div><div id="productTotals" class="panel-body"><div class="empty">Kargoya hazır siparişlerdeki ürün toplamları burada görünecek.</div></div></div><div class="panel"><div class="panel-head"><div class="panel-title">Tüm Siparişler</div><span class="badge" id="allOrdersBadge">0</span></div><div id="ordersList" class="panel-body"><div class="empty">Henüz canlı sipariş verisi bağlı değil.</div></div></div><div class="panel" style="grid-column:1/-1"><div class="panel-head"><div class="panel-title">Teslim Edilen Siparişler</div><span class="badge" id="deliveredOrdersBadge">0</span></div><div id="deliveredOrdersList" class="panel-body"><div class="empty">Teslim edilen sipariş bulunamadı.</div></div></div></div>
         </div>
 
-        <div id="page-integration" class="page"><div class="page-head"><div><div class="page-title">ikas Entegrasyonu</div><div class="page-sub">Bir sonraki adımda ikas API bilgilerini buraya bağlayacağız.</div></div></div><div class="card"><div class="card-title">Bağlantı Planı</div><p class="page-sub">Siparişler, ürün görselleri, ürün adları ve toplam hazırlanacak adetler bu menüye aktarılacak.</p></div></div>
+        <div id="page-integration" class="page">
+          <div class="page-head"><div><div class="page-title">ikas Entegrasyonu</div><div class="page-sub">Sipariş, ürün, koleksiyon ve hazırlık listelerini ayrı ayrı yönet.</div></div><button class="btn gold" data-route="ikas-orders">Tüm Siparişler →</button></div>
+          <div class="modules">
+            <button class="module" data-route="ikas-orders"><div class="module-ico">♧</div><h3>TÜM SİPARİŞLER</h3><p>En güncel siparişler en üstte, durumları ve ürünleriyle görünür.</p><span class="btn gold">Aç →</span></button>
+            <button class="module" data-route="ikas-products"><div class="module-ico">◇</div><h3>TÜM ÜRÜNLER</h3><p>Ürün adı, fotoğraf, varyant, SKU ve stok bilgileri.</p><span class="btn gold">Aç →</span></button>
+            <button class="module" data-route="ikas-collections"><div class="module-ico">▣</div><h3>TÜM KOLEKSİYONLAR</h3><p>ikas kategori/koleksiyonları ve içindeki ürünler.</p><span class="btn gold">Aç →</span></button>
+            <button class="module" data-route="ikas-ready-orders"><div class="module-ico">✓</div><h3>HAZIRLANACAK SİPARİŞLER</h3><p>Sadece kargoya hazır siparişler.</p><span class="btn gold">Aç →</span></button>
+            <button class="module" data-route="ikas-ready-products"><div class="module-ico">＋</div><h3>HAZIRLANACAK ÜRÜN TOPLAMLARI</h3><p>Kargoya hazır siparişlerde hangi üründen kaç adet hazırlanacak.</p><span class="btn gold">Aç →</span></button>
+          </div>
+        </div>
+
+        <div id="page-products" class="page"><div class="page-head"><div><div class="page-title">Ürünler</div><div class="page-sub">Tüm ikas ürünleri.</div></div><button class="btn gold" data-route="ikas-products">Ürünleri Aç</button></div><div id="productsGrid" class="panel-body"><div class="empty">Ürünler yükleniyor...</div></div></div>
+
+        <div id="page-ikas-orders" class="page"><div class="page-head"><div><div class="page-title">Tüm Siparişler</div><div class="page-sub">Bütün siparişler tarihe göre; en güncel sipariş en üstte.</div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div><div id="ikasAllOrders" class="panel-body"><div class="empty">Siparişler yükleniyor...</div></div></div>
+        <div id="page-ikas-products" class="page"><div class="page-head"><div><div class="page-title">Tüm Ürünler</div><div class="page-sub">Ürün fotoğrafı, varyant, SKU ve stok bilgileri.</div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div><div id="ikasAllProducts" class="panel-body"><div class="empty">Ürünler yükleniyor...</div></div></div>
+        <div id="page-ikas-collections" class="page"><div class="page-head"><div><div class="page-title">Tüm Koleksiyonlar</div><div class="page-sub">ikas kategori/koleksiyonları ve içindeki ürünler.</div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div><div id="ikasAllCollections" class="panel-body"><div class="empty">Koleksiyonlar yükleniyor...</div></div></div>
+        <div id="page-ikas-ready-orders" class="page"><div class="page-head"><div><div class="page-title">Hazırlanacak Siparişler</div><div class="page-sub">Sadece kargoya hazır durumundaki siparişler.</div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div><div id="ikasReadyOrders" class="panel-body"><div class="empty">Hazırlanacak siparişler yükleniyor...</div></div></div>
+        <div id="page-ikas-ready-products" class="page"><div class="page-head"><div><div class="page-title">Hazırlanacak Ürün Toplamları</div><div class="page-sub">Kargoya hazır siparişlerden birleştirilmiş ürün hazırlık listesi.</div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div><div id="ikasReadyProductTotals" class="panel-body"><div class="empty">Ürün toplamları yükleniyor...</div></div></div>
         <div id="page-notifications" class="page"><div class="page-title">Bildirimler</div><p class="page-sub">Push bildirimleri ve hatırlatmalar burada yönetilecek.</p></div>
         <div id="page-products" class="page"><div class="page-title">Ürünler</div><p class="page-sub">ikas ürün listesi bağlanınca burada görünecek.</p></div>
         <div id="page-reports" class="page"><div class="page-title">Raporlar</div><p class="page-sub">Satış ve destek raporları burada hazırlanacak.</p></div>
@@ -1318,7 +1520,7 @@ function adminHtml() {
 <script>
 (function(){
   var token=localStorage.getItem('ruth_admin_token')||'';
-  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0},productTotals:[],orders:[],deliveredOrders:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null;
+  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null;
   function $(id){return document.getElementById(id)}
   function qsa(sel){return Array.prototype.slice.call(document.querySelectorAll(sel))}
   function setText(id,val){var el=$(id); if(el) el.textContent=(val===undefined||val===null)?'':String(val)}
@@ -1338,7 +1540,7 @@ function adminHtml() {
   qsa('[data-route]').forEach(function(el){el.addEventListener('click',function(){setRoute(el.getAttribute('data-route'),true); $('app').classList.remove('mobile-open')})});
   window.addEventListener('popstate',function(){setRoute(routeFromPath(),false)});
   function routeFromPath(){var p=location.pathname||'/admin/'; if(p.indexOf('/admin/')===0){p=p.slice('/admin/'.length)} else if(p==='/admin'){p=''}; while(p.endsWith('/')) p=p.slice(0,-1); return p||'overview'}
-  function setRoute(route,push){var allowed=['overview','support','crm','orders','integration','notifications','products','reports','settings']; if(allowed.indexOf(route)<0) route='overview'; activeRoute=route; qsa('.page').forEach(function(p){p.classList.remove('active')}); var page=$('page-'+route); if(page) page.classList.add('active'); qsa('.nav-item').forEach(function(n){n.classList.toggle('active',n.getAttribute('data-route')===route)}); var titles={overview:'Genel Bakış',support:'Canlı Destek',crm:'CRM',orders:'Siparişler',integration:'ikas Entegrasyonu',notifications:'Bildirimler',products:'Ürünler',reports:'Raporlar',settings:'Ayarlar'}; setText('crumbTitle',titles[route]||'Panel'); if(push) history.pushState(null,'','/admin/'+(route==='overview'?'':route)); if(route==='support'){loadConversations(true)} if(route==='crm'){loadConversations(true)} if(route==='orders'){loadIkasSummary()} }
+  function setRoute(route,push){var allowed=['overview','support','crm','orders','integration','notifications','products','reports','settings','ikas-orders','ikas-products','ikas-collections','ikas-ready-orders','ikas-ready-products']; if(allowed.indexOf(route)<0) route='overview'; activeRoute=route; qsa('.page').forEach(function(p){p.classList.remove('active')}); var page=$('page-'+route); if(page) page.classList.add('active'); qsa('.nav-item').forEach(function(n){n.classList.toggle('active',n.getAttribute('data-route')===route)}); var titles={overview:'Genel Bakış',support:'Canlı Destek',crm:'CRM',orders:'Siparişler',integration:'ikas Entegrasyonu',notifications:'Bildirimler',products:'Ürünler',reports:'Raporlar',settings:'Ayarlar','ikas-orders':'Tüm Siparişler','ikas-products':'Tüm Ürünler','ikas-collections':'Tüm Koleksiyonlar','ikas-ready-orders':'Hazırlanacak Siparişler','ikas-ready-products':'Hazırlanacak Ürün Toplamları'}; setText('crumbTitle',titles[route]||'Panel'); if(push) history.pushState(null,'','/admin/'+(route==='overview'?'':route)); if(route==='support'){loadConversations(true)} if(route==='crm'){loadConversations(true)} if(['orders','integration','products','ikas-orders','ikas-products','ikas-collections','ikas-ready-orders','ikas-ready-products'].indexOf(route)>=0){loadIkasSummary()} }
   function loadAll(){ loadConversations(true); loadReminders(); loadIkasSummary(); setInterval(function(){if(token)loadConversations(true)},6000); }
   function loadConversations(silent){ return api('/api/admin/conversations').then(function(d){conversations=d.conversations||[]; renderAll(); if(activeId){ if(activeRoute==='support')loadMessages(activeId,true); if(activeRoute==='crm')loadCrmDetail(activeId,true); }}).catch(function(err){if(!silent)toast(err.message)})}
   function loadReminders(){return api('/api/admin/reminders/due').then(function(d){reminders=d.reminders||[]; renderReminders()}).catch(function(){})}
@@ -1361,66 +1563,34 @@ function adminHtml() {
   function loadCrmDetail(id,silent){var c=getActive(); setText('crmTitle',c.displayName||'Ziyaretçi'); setText('crmSub',c.pageTitle||c.pageUrl||'Müşteri kaydı'); setText('crmPhone',c.visitorPhone||'-'); setText('crmStatus',c.status||'open'); setText('crmLast',c.lastMessageText||'-'); $('noteText').disabled=false; $('noteReminder').disabled=false; $('noteBtn').disabled=false; if(!silent)$('notesList').innerHTML='<div class="empty">Notlar yükleniyor...</div>'; return api('/api/admin/conversations/'+encodeURIComponent(id)+'/messages').then(function(d){renderNotes(d.notes||[])}).catch(function(err){$('notesList').innerHTML='<div class="empty">CRM yüklenemedi: '+escapeHtml(err.message)+'</div>'})}
   function renderNotes(notes){var el=$('notesList'); if(!notes.length){el.innerHTML='<div class="empty">Bu müşteri için henüz özel not yok.</div>';return;} el.innerHTML=notes.map(function(n){return '<div class="note '+(n.completedAt?'done':'')+'"><div class="row"><div class="note-body">'+escapeHtml(n.body)+'</div><button class="btn ghost note-done" data-id="'+escapeHtml(n.id)+'" data-done="'+(n.completedAt?'1':'0')+'">'+(n.completedAt?'Geri Al':'Tamamla')+'</button></div><div class="note-meta">Hatırlatma: '+escapeHtml(n.reminderAt?fmtDate(n.reminderAt):'Yok')+' • Oluşturuldu: '+fmtDate(n.createdAt)+'</div></div>'}).join(''); qsa('.note-done').forEach(function(b){b.addEventListener('click',function(){api('/api/admin/notes/'+encodeURIComponent(b.getAttribute('data-id')),{method:'PATCH',body:JSON.stringify({completed:b.getAttribute('data-done')!=='1'})}).then(function(){loadCrmDetail(activeId);loadReminders()})})})}
   $('noteForm').addEventListener('submit',function(e){e.preventDefault(); if(!activeId)return; var text=$('noteText').value.trim(); if(!text)return; $('noteBtn').disabled=true; api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/notes',{method:'POST',body:JSON.stringify({note:text,reminderAt:$('noteReminder').value||''})}).then(function(){$('noteText').value='';$('noteReminder').value='';loadCrmDetail(activeId);loadReminders();toast('Müşteri notu eklendi')}).catch(function(err){alert('Not eklenemedi: '+err.message)}).finally(function(){$('noteBtn').disabled=false})});
+  function imgHtml(src, cls){return '<div class="prod-img '+(cls||'')+'">'+(src?'<img src="'+escapeHtml(src)+'" alt="" onerror="this.closest(\'.prod-img\').textContent=\'◇\';this.remove()">':'◇')+'</div>'}
+  function orderProductsHtml(o){var items=o.items||[]; if(!items.length)return '<div class="empty">Ürün yok</div>'; return '<div class="order-products">'+items.map(function(i){return '<div class="order-product">'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+escapeHtml(i.status||'')+'</div></div><div class="badge">× '+Number(i.quantity||0)+'</div></div>'}).join('')+'</div>'}
+  function orderCard(o){var amount=(o.currency||'₺')+' '+Number(o.total||0).toLocaleString('tr-TR'); return '<div class="order-card"><div class="row"><div><div class="name">'+escapeHtml(o.number||'Sipariş')+' — '+escapeHtml(o.customer||'')+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.status||'Durum yok')+' • '+escapeHtml(o.paymentStatus||'')+' • '+amount+'</div></div><span class="badge">'+escapeHtml(o.packageStatus||o.status||'Yeni')+'</span></div>'+orderProductsHtml(o)+'</div>'}
+  function productCard(p){var variantText=(p.variants||[]).slice(0,3).map(function(v){return [v.sku, v.variantText].filter(Boolean).join(' • ')}).filter(Boolean).join(' / '); var cats=(p.categoryNames||[]).slice(0,3).map(function(c){return '<span class="chip">'+escapeHtml(c)+'</span>'}).join(''); return '<div class="product-card">'+imgHtml(p.image,'large')+'<div><div class="name">'+escapeHtml(p.name||'Ürün')+'</div><div class="preview">Stok: '+Number(p.totalStock||0)+' • Varyant: '+Number(p.variantCount||0)+'</div><div class="preview">'+escapeHtml(variantText||'Varyant bilgisi yok')+'</div><div class="chips">'+cats+'</div></div></div>'}
+  function readyProductRow(p){var orderText=(p.orders||[]).slice(0,6).map(function(o){return escapeHtml(o.orderNumber)+' × '+Number(o.quantity||0)}).join(' • '); return '<div class="product-row">'+imgHtml(p.image,'')+'<div><div class="name">'+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+(p.sku?'SKU: '+escapeHtml(p.sku)+' • ':'')+orderText+'</div></div><div class="qty">'+Number(p.quantity||0)+'</div></div>'}
+  function collectionCard(c){var productNames=(c.products||[]).slice(0,5).map(function(p){return escapeHtml(p.name)}).join(' • '); return '<div class="collection-card">'+imgHtml(c.image,'large')+'<div><div class="name">'+escapeHtml(c.name||'Koleksiyon')+'</div><div class="preview">'+Number(c.productCount||0)+' ürün</div><div class="preview" style="white-space:normal">'+productNames+'</div></div></div>'}
   function renderIkas(){
     var totals=ikasSummary.totals||{};
-    var products=ikasSummary.productTotals||[];
-    var orders=ikasSummary.orders||[];
-    var delivered=ikasSummary.deliveredOrders||[];
-    setText('statOrders',totals.orders||0);
-    setText('badgeOrders',totals.orders||0);
-    setText('ordersToday',totals.orders||0);
-    setText('unitsToday',totals.units||0);
-    setText('kindsToday',products.length||0);
-    setText('ordersTotal',totals.orders||0);
-    setText('unitsTotal',totals.readyUnits||totals.units||0);
-    setText('productKinds',products.length||0);
-    setText('ikasStatus',ikasSummary.connected?'Bağlı':'Bekliyor');
-    setText('readyOrdersBadge',totals.readyOrders||0);
-    setText('allOrdersBadge',totals.orders||0);
-    setText('deliveredOrdersBadge',totals.deliveredOrders||delivered.length||0);
-
-    var top=$('topProducts');
-    if(top){
-      if(products.length){
-        top.innerHTML=products.slice(0,5).map(function(p,i){
-          return '<div class="rail-product"><div class="prod-img">'+(p.image?'<img src="'+escapeHtml(p.image)+'" alt="">':'◇')+'</div><div><div class="name">'+(i+1)+'. '+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+Number(p.quantity||0)+' adet • Kargoya hazır</div></div></div>'
-        }).join('')
-      } else top.innerHTML='<div class="empty">Kargoya hazır ürün bulunamadı.</div>'
-    }
-
-    var el=$('productTotals');
-    if(el){
-      if(products.length){
-        el.innerHTML=products.map(function(p){
-          var orderText=(p.orders||[]).slice(0,4).map(function(o){return escapeHtml(o.orderNumber)+' × '+Number(o.quantity||0)}).join(' • ');
-          return '<div class="product-row"><div class="prod-img">'+(p.image?'<img src="'+escapeHtml(p.image)+'" alt="">':'◇')+'</div><div><div class="name">'+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+(p.sku?'SKU: '+escapeHtml(p.sku)+' • ':'')+orderText+'</div></div><div class="qty">'+Number(p.quantity||0)+'</div></div>'
-        }).join('')
-      } else el.innerHTML='<div class="empty">Kargoya hazır olarak işaretlenmiş siparişlerde ürün yok.</div>'
-    }
-
-    var list=$('ordersList');
-    if(list){
-      if(orders.length){
-        list.innerHTML=orders.map(function(o){
-          var items=(o.items||[]).slice(0,3).map(function(i){return escapeHtml(i.name)+' × '+Number(i.quantity||0)}).join('<br>');
-          var amount=(o.currency||'₺')+' '+Number(o.total||0).toLocaleString('tr-TR');
-          return '<div class="order-row"><div class="prod-img">▣</div><div><div class="name">'+escapeHtml(o.number||'Sipariş')+' — '+escapeHtml(o.customer||'')+'</div><div class="preview">'+escapeHtml(o.status||'Durum yok')+' • '+escapeHtml(o.paymentStatus||'')+' • '+amount+'</div><div class="preview" style="white-space:normal">'+items+'</div></div><div class="badge">'+escapeHtml(o.packageStatus||o.status||'Yeni')+'</div></div>'
-        }).join('')
-      } else list.innerHTML=ikasSummary.ikasError?'<div class="empty">'+escapeHtml(ikasSummary.ikasError)+'</div>':'<div class="empty">Henüz canlı sipariş verisi bağlı değil.</div>'
-    }
-
-    var deliveredList=$('deliveredOrdersList');
-    if(deliveredList){
-      if(delivered.length){
-        deliveredList.innerHTML=delivered.map(function(o){
-          var items=(o.items||[]).slice(0,5).map(function(i){return escapeHtml(i.name)+' × '+Number(i.quantity||0)}).join('<br>');
-          return '<div class="order-row"><div class="prod-img">✓</div><div><div class="name">'+escapeHtml(o.number||'Sipariş')+' — '+escapeHtml(o.customer||'')+'</div><div class="preview">'+escapeHtml(o.packageStatus||'Teslim Edildi')+' • '+formatDate(o.orderedAt)+'</div><div class="preview" style="white-space:normal">'+items+'</div></div><div class="badge">Teslim</div></div>'
-        }).join('')
-      } else deliveredList.innerHTML='<div class="empty">Teslim edilen sipariş bulunamadı.</div>'
-    }
+    var readyProducts=ikasSummary.readyProductTotals||ikasSummary.productTotals||[];
+    var orders=(ikasSummary.orders||[]).slice().sort(function(a,b){return String(b.orderedAt||'').localeCompare(String(a.orderedAt||''))});
+    var readyOrders=(ikasSummary.readyOrders||orders.filter(function(o){return /Kargoya Hazır/i.test(o.packageStatus||o.status||'')})).slice().sort(function(a,b){return String(b.orderedAt||'').localeCompare(String(a.orderedAt||''))});
+    var delivered=(ikasSummary.deliveredOrders||[]).slice().sort(function(a,b){return String(b.orderedAt||'').localeCompare(String(a.orderedAt||''))});
+    var allProducts=ikasSummary.products||[];
+    var collections=ikasSummary.collections||[];
+    setText('statOrders',totals.orders||0); setText('badgeOrders',totals.orders||0); setText('ordersToday',totals.orders||0); setText('unitsToday',totals.units||0); setText('kindsToday',readyProducts.length||allProducts.length||0); setText('ordersTotal',totals.orders||0); setText('unitsTotal',totals.readyUnits||totals.units||0); setText('productKinds',allProducts.length||readyProducts.length||0); setText('ikasStatus',ikasSummary.connected?'Bağlı':'Bekliyor'); setText('readyOrdersBadge',totals.readyOrders||readyOrders.length||0); setText('badgeReadyOrders',totals.readyOrders||readyOrders.length||0); setText('allOrdersBadge',totals.orders||0); setText('deliveredOrdersBadge',totals.deliveredOrders||delivered.length||0);
+    var top=$('topProducts'); if(top){ top.innerHTML=readyProducts.length?readyProducts.slice(0,5).map(function(p,i){return '<div class="rail-product">'+imgHtml(p.image,'')+'<div><div class="name">'+(i+1)+'. '+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+Number(p.quantity||0)+' adet • Kargoya hazır</div></div></div>'}).join(''):'<div class="empty">Kargoya hazır ürün bulunamadı.</div>'; }
+    var el=$('productTotals'); if(el){ el.innerHTML=readyProducts.length?readyProducts.map(readyProductRow).join(''):'<div class="empty">Kargoya hazır olarak işaretlenmiş siparişlerde ürün yok.</div>'; }
+    var list=$('ordersList'); if(list){ list.innerHTML=orders.length?orders.slice(0,60).map(orderCard).join(''):(ikasSummary.ikasError?'<div class="empty">'+escapeHtml(ikasSummary.ikasError)+'</div>':'<div class="empty">Henüz canlı sipariş verisi bağlı değil.</div>'); }
+    var deliveredList=$('deliveredOrdersList'); if(deliveredList){ deliveredList.innerHTML=delivered.length?delivered.map(orderCard).join(''):'<div class="empty">Teslim edilen sipariş bulunamadı.</div>'; }
+    var allOrdersEl=$('ikasAllOrders'); if(allOrdersEl){ allOrdersEl.innerHTML=orders.length?orders.map(orderCard).join(''):'<div class="empty">Sipariş bulunamadı.</div>'; }
+    var readyOrdersEl=$('ikasReadyOrders'); if(readyOrdersEl){ readyOrdersEl.innerHTML=readyOrders.length?readyOrders.map(orderCard).join(''):'<div class="empty">Kargoya hazır sipariş bulunamadı.</div>'; }
+    var readyProductsEl=$('ikasReadyProductTotals'); if(readyProductsEl){ readyProductsEl.innerHTML=readyProducts.length?readyProducts.map(readyProductRow).join(''):'<div class="empty">Hazırlanacak ürün toplamı yok.</div>'; }
+    var productsEl=$('ikasAllProducts'); if(productsEl){ productsEl.innerHTML=allProducts.length?'<div class="product-grid">'+allProducts.map(productCard).join('')+'</div>':(ikasSummary.productError?'<div class="empty">Ürünler çekilemedi: '+escapeHtml(ikasSummary.productError)+'</div>':'<div class="empty">Ürün bulunamadı.</div>'); }
+    var productsGrid=$('productsGrid'); if(productsGrid){ productsGrid.innerHTML=allProducts.length?'<div class="product-grid">'+allProducts.map(productCard).join('')+'</div>':'<div class="empty">Ürün bulunamadı.</div>'; }
+    var collectionsEl=$('ikasAllCollections'); if(collectionsEl){ collectionsEl.innerHTML=collections.length?'<div class="product-grid">'+collections.map(collectionCard).join('')+'</div>':'<div class="empty">Koleksiyon/kategori bulunamadı.</div>'; }
   }
   function formatDate(value){if(!value)return ''; try{return new Date(value).toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return ''}}
-    $('syncOrders').addEventListener('click',function(){loadIkasSummary().then(function(){toast('Sipariş verisi yenilendi')})}); $('quickSync').addEventListener('click',function(){setRoute('orders',true);loadIkasSummary().then(function(){toast('Sipariş verisi yenilendi')})});
+    if($('syncOrders'))$('syncOrders').addEventListener('click',function(){loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})}); if($('quickSync'))$('quickSync').addEventListener('click',function(){setRoute('ikas-orders',true);loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})}); qsa('.ikas-refresh').forEach(function(btn){btn.addEventListener('click',function(){loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})})});
   $('refreshSupport').addEventListener('click',function(){loadConversations(false)}); $('refreshCrm').addEventListener('click',function(){loadConversations(false)}); $('searchInput').addEventListener('input',renderConversations); $('crmSearch').addEventListener('input',renderCustomers);
   $('pushBtn').addEventListener('click',subscribePush);
   function subscribePush(){ if(!('serviceWorker' in navigator)||!('PushManager' in window)){alert('Bu tarayıcı bildirim desteklemiyor.');return;} api('/api/admin/me').then(function(me){if(!me.vapidPublicKey)throw new Error('VAPID key yok'); return navigator.serviceWorker.register('/sw.js').then(function(reg){return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)})})}).then(function(sub){return api('/api/admin/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub})})}).then(function(){toast('Bildirimler açıldı')}).catch(function(err){alert('Bildirim açılamadı: '+err.message)})}
