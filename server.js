@@ -343,11 +343,11 @@ async function handleCustomerMessage(req, res) {
   });
 
   await notifyAdmins({
-    title: ADMIN_NOTIFICATION_TITLE,
+    title: "RUTH ISTANBUL • Yeni müşteri mesajı",
     body: `${displayName(conversation)}: ${text || "Fotoğraf gönderdi"}`,
     url: `/admin/?conversation=${encodeURIComponent(conversation.id)}`,
     tag: `conversation-${conversation.id}`,
-    data: { conversationId: conversation.id, messageId: saved.id }
+    data: { conversationId: conversation.id, messageId: saved.id, url: `/admin/?conversation=${encodeURIComponent(conversation.id)}` }
   });
 
   sendJson(res, {
@@ -568,6 +568,24 @@ async function handleAdminApi(req, res, url) {
     return sendJson(res, { ok: true, reminders: reminders.map(adminReminder) });
   }
 
+  if (req.method === "GET" && pathname === "/api/admin/push/status") {
+    let count = 0;
+    let error = "";
+    try {
+      const subscriptions = await storage.listPushSubscriptions();
+      count = Array.isArray(subscriptions) ? subscriptions.length : 0;
+    } catch (err) {
+      error = err && err.message ? err.message : String(err);
+    }
+    return sendJson(res, {
+      ok: true,
+      configured: Boolean(webPush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY),
+      pushReady: Boolean(webPush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY),
+      subscriptionCount: count,
+      error
+    });
+  }
+
   if (req.method === "POST" && pathname === "/api/admin/push/subscribe") {
     const body = await readJson(req, 500_000);
     const subscription = body.subscription || body;
@@ -578,7 +596,9 @@ async function handleAdminApi(req, res, url) {
       endpoint: String(subscription.endpoint),
       keys: subscription.keys || {},
       userAgent: String(req.headers["user-agent"] || ""),
-      createdAt: new Date().toISOString()
+      username: req.admin && req.admin.sub ? String(req.admin.sub) : "",
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
     });
     return sendJson(res, { ok: true });
   }
@@ -2355,10 +2375,16 @@ function isAdminTyping(conversationId) {
 }
 
 async function notifyAdmins(payload) {
-  if (!webPush || !VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) return false;
+  if (!webPush || !VAPID_PUBLIC_KEY || !VAPID_PRIVATE_KEY) {
+    console.error("Push not configured: web-push/VAPID env missing");
+    return false;
+  }
 
   const subscriptions = await storage.listPushSubscriptions();
-  if (!subscriptions.length) return false;
+  if (!subscriptions.length) {
+    console.error("Push skipped: no admin device subscription");
+    return false;
+  }
   await Promise.all(subscriptions.map(async (subscription) => {
     try {
       await webPush.sendNotification({
@@ -2676,7 +2702,7 @@ function serveStatic(req, res, url) {
   if (url.pathname === "/sw.js") {
     const swFile = path.join(PUBLIC_DIR, "admin", "sw.js");
     if (fs.existsSync(swFile)) return sendFile(res, swFile);
-    return sendText(res, "self.addEventListener('push',function(event){var data={};try{data=event.data?event.data.json():{};}catch(e){};event.waitUntil(self.registration.showNotification(data.title||'RUTH ISTANBUL',{body:data.body||'Yeni mesaj var.',tag:data.tag||'ruth',data:data.data||{},icon:data.icon||'/ruth-favicon-192.png'}));});self.addEventListener('notificationclick',function(event){event.notification.close();event.waitUntil(clients.openWindow('/admin/'));});", "text/javascript; charset=utf-8");
+    return sendText(res, "self.addEventListener('push',function(event){var data={};try{data=event.data?event.data.json():{};}catch(e){};var target=data.url||(data.data&&data.data.url)||'/admin/';var options={body:data.body||'Yeni müşteri mesajı var.',tag:data.tag||'ruth-message',renotify:true,requireInteraction:true,data:{url:target},icon:data.icon||'/ruth-favicon-192.png',badge:data.badge||'/ruth-favicon-192.png'};event.waitUntil(self.registration.showNotification(data.title||'RUTH ISTANBUL',options));});self.addEventListener('notificationclick',function(event){event.notification.close();var target=(event.notification.data&&event.notification.data.url)||'/admin/';if(!target||target.indexOf('http')===0)target='/admin/';event.waitUntil(clients.matchAll({type:'window',includeUncontrolled:true}).then(function(list){for(var i=0;i<list.length;i++){var client=list[i];if(client.url.indexOf('/admin')>=0&&'focus'in client){client.focus();client.navigate(target);return;}}return clients.openWindow(target);}));});", "text/javascript; charset=utf-8");
   }
 
   return false;
@@ -2953,7 +2979,7 @@ function adminHtml(serverAdmin) {
         <div id="page-ikas-collections" class="page"><div class="page-head"><div><div class="page-title">Tüm Koleksiyonlar</div><div class="page-sub">ikas kategori/koleksiyonları ve içindeki ürünler.</div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div><div id="ikasAllCollections" class="panel-body"><div class="empty">Koleksiyonlar yükleniyor...</div></div></div>
         <div id="page-ikas-ready-orders" class="page"><div class="page-head"><div><div class="page-title">Hazırlanacak Siparişler</div><div class="page-sub">Sadece kargoya hazır durumundaki siparişler.</div></div><div class="head-tools"><div class="date-filter" data-date-filter><select class="date-select" data-date-preset><option value="today">Bugün</option><option value="yesterday">Dün</option><option value="this_week">Bu hafta</option><option value="last_week">Geçen hafta</option><option value="this_month">Bu ay</option><option value="last_month">Geçen ay</option><option value="this_year">Bu yıl</option><option value="custom">Özel tarih</option><option value="all">Tüm zamanlar</option></select><div class="date-custom"><input class="date-input" type="date" data-date-start><span class="time">-</span><input class="date-input" type="date" data-date-end></div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div></div><div id="ikasReadyOrders" class="panel-body"><div class="empty">Hazırlanacak siparişler yükleniyor...</div></div></div>
         <div id="page-ikas-ready-products" class="page"><div class="page-head"><div><div class="page-title">Hazırlanacak Ürün Toplamları</div><div class="page-sub">Kargoya hazır siparişlerden birleştirilmiş ürün hazırlık listesi.</div></div><div class="head-tools"><div class="date-filter" data-date-filter><select class="date-select" data-date-preset><option value="today">Bugün</option><option value="yesterday">Dün</option><option value="this_week">Bu hafta</option><option value="last_week">Geçen hafta</option><option value="this_month">Bu ay</option><option value="last_month">Geçen ay</option><option value="this_year">Bu yıl</option><option value="custom">Özel tarih</option><option value="all">Tüm zamanlar</option></select><div class="date-custom"><input class="date-input" type="date" data-date-start><span class="time">-</span><input class="date-input" type="date" data-date-end></div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div></div><div id="ikasReadyProductTotals" class="panel-body"><div class="empty">Ürün toplamları yükleniyor...</div></div></div>
-        <div id="page-notifications" class="page"><div class="page-title">Bildirimler</div><p class="page-sub">Push bildirimleri ve hatırlatmalar burada yönetilecek.</p></div>
+        <div id="page-notifications" class="page"><div class="page-head"><div><div class="page-title">Bildirimler</div><div class="page-sub">Telefona canlı destek bildirimi gelsin diye bu cihazı kaydet.</div></div></div><div class="module-grid"><div class="module" style="align-items:flex-start;text-align:left"><div class="module-ico">🔔</div><h3>Telefon Bildirimleri</h3><p id="pushStatusText">Bildirim durumu kontrol ediliyor...</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button id="pushSetupBtn" class="btn gold" type="button">Bu Telefonda Bildirimi Aç</button><button id="pushTestBtn" class="btn ghost" type="button">Test Bildirimi Gönder</button></div><p class="page-sub" style="margin-top:12px">iPhone kullanıyorsan: Safari’de paneli aç → Paylaş → Ana Ekrana Ekle → ana ekrandan aç → bu butona bas. Safari sekmesinden bildirim gelmeyebilir.</p></div></div></div>
         <div id="page-products" class="page"><div class="page-title">Ürünler</div><p class="page-sub">ikas ürün listesi bağlanınca burada görünecek.</p></div>
         <div id="page-reports" class="page"><div class="page-title">Raporlar</div><p class="page-sub">Satış ve destek raporları burada hazırlanacak.</p></div>
         <div id="page-settings" class="page"><div class="page-title">Ayarlar</div><p class="page-sub">Panel ayarları burada olacak.</p></div>
@@ -3098,9 +3124,12 @@ function adminHtml(serverAdmin) {
   document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('[data-page-target]'); if(!b)return; var page=Number(b.getAttribute('data-page')||1); var target=b.getAttribute('data-page-target'); if(target==='orders')ordersPage=page; if(target==='allOrders')allOrdersPage=page; if(target==='deliveredOrders')deliveredOrdersPage=page; renderIkas();});
   if($('syncOrders'))$('syncOrders').addEventListener('click',function(){loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})}); if($('quickSync'))$('quickSync').addEventListener('click',function(){setRoute('ikas-orders',true);loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})}); qsa('.ikas-refresh').forEach(function(btn){btn.addEventListener('click',function(){loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})})});
   on('refreshSupport','click',function(){loadConversations(false)}); on('refreshCrm','click',function(){loadConversations(false)}); on('searchInput','input',renderConversations); on('crmSearch','input',renderCustomers);
-  on('pushBtn','click',subscribePush);
-  function subscribePush(){ if(!('serviceWorker' in navigator)||!('PushManager' in window)){alert('Bu tarayıcı bildirim desteklemiyor.');return;} api('/api/admin/me').then(function(me){if(!me.vapidPublicKey)throw new Error('VAPID key yok'); return navigator.serviceWorker.register('/sw.js').then(function(reg){return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)})})}).then(function(sub){return api('/api/admin/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub})})}).then(function(){toast('Bildirimler açıldı')}).catch(function(err){alert('Bildirim açılamadı: '+err.message)})}
+  on('pushBtn','click',subscribePush); on('pushSetupBtn','click',subscribePush); on('pushTestBtn','click',sendTestPush);
+  function refreshPushStatus(){var el=$('pushStatusText'); if(!el)return; var permission=(typeof Notification!=='undefined'?Notification.permission:'unsupported'); api('/api/admin/push/status').then(function(s){var text='Sunucu: '+(s.pushReady?'hazır':'hazır değil')+' • Kayıtlı cihaz: '+(s.subscriptionCount||0)+' • Bu cihaz izni: '+permission; if(!s.pushReady)text+=' • Render env içinde VAPID_PUBLIC_KEY ve VAPID_PRIVATE_KEY lazım.'; if(s.error)text+=' • Kayıt tablosu hatası: '+s.error; el.textContent=text;}).catch(function(){el.textContent='Bildirim durumu alınamadı.'})}
+  function subscribePush(){ if(!('serviceWorker' in navigator)||!('PushManager' in window)){alert('Bu tarayıcı bildirim desteklemiyor. iPhone kullanıyorsan paneli Safari ile açıp Ana Ekrana Ekle, sonra ana ekrandaki ikonla aç.');return Promise.reject(new Error('unsupported'));} if(typeof Notification==='undefined'){alert('Bu tarayıcı bildirim izni desteklemiyor.');return Promise.reject(new Error('notifications_unsupported'));} return api('/api/admin/me').then(function(me){if(!me.vapidPublicKey)throw new Error('VAPID key yok. Render Environment kısmına VAPID_PUBLIC_KEY ve VAPID_PRIVATE_KEY eklenmeli.'); return navigator.serviceWorker.register('/sw.js').then(function(reg){return navigator.serviceWorker.ready.then(function(){return reg.pushManager.getSubscription().then(function(existing){if(existing)return existing; if(Notification.permission==='denied')throw new Error('Bildirim izni engellenmiş. Telefon ayarlarından izin ver.'); var ask=Notification.permission==='granted'?Promise.resolve('granted'):Notification.requestPermission(); return ask.then(function(permission){if(permission!=='granted')throw new Error('Bildirim izni verilmedi.'); return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)});});});});});}).then(function(sub){return api('/api/admin/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub})})}).then(function(){toast('Bildirimler açıldı'); refreshPushStatus(); return sendTestPush(true);}).catch(function(err){alert('Bildirim açılamadı: '+err.message); refreshPushStatus(); throw err;})}
+  function sendTestPush(silent){return api('/api/admin/push/test',{method:'POST'}).then(function(){if(!silent)toast('Test bildirimi gönderildi')}).catch(function(err){if(!silent)alert('Test bildirimi gönderilemedi: '+err.message)})}
   function urlBase64ToUint8Array(base64String){var padding='='.repeat((4-base64String.length%4)%4); var base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/'); var raw=atob(base64); var arr=new Uint8Array(raw.length); for(var i=0;i<raw.length;++i)arr[i]=raw.charCodeAt(i); return arr}
+  setTimeout(refreshPushStatus,1200);
   (function bootAuth(){
     var serverAuth = window.__RUTH_SERVER_AUTH__ && window.__RUTH_SERVER_AUTH__.ok;
     var forceOpen = sessionStorage.getItem('ruth_admin_force_open') === '1';
