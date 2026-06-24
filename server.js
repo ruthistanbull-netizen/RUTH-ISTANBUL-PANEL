@@ -198,671 +198,6 @@ const server = http.createServer(async (req, res) => {
         }).join("");
         const busy = summary.__busy ? `<p class="warn">Fotoğraf taraması devam ediyor. 20-30 saniye sonra yenile.</p>` : "";
         return sendHtml(res, `<!doctype html><html><head><meta charset="utf-8"><title>Ruth Eksik Fotoğraflar</title>${summary.__busy ? '<meta http-equiv="refresh" content="8">' : ''}<style>body{background:#0b0b0c;color:#f4ead8;font-family:Arial;padding:24px}a{color:#f1c76a}table{width:100%;border-collapse:collapse;margin-top:16px}td,th{border-bottom:1px solid #333;padding:10px;text-align:left;vertical-align:top}.ok{color:#f1c76a}.warn{color:#f1c76a;background:#15120b;border:1px solid #3a3325;padding:10px 14px;border-radius:12px;display:inline-block}.muted{color:#a99f8d}.card{display:inline-block;border:1px solid #3a3325;background:#15120b;border-radius:12px;padding:10px 14px;margin:8px 0}
-/* Ruth gold R logo override */
-.brand-mark,.avatar{
-  background-image:url('/ruth-gold-r-logo.png') !important;
-  background-size:72% 72% !important;
-  background-repeat:no-repeat !important;
-  background-position:center !important;
-  color:transparent !important;
-  font-size:0 !important;
-}
-.brand-mark{border-radius:50% !important}
-.avatar{border-radius:50% !important}
-.brand-mark img,.avatar img{
-  content:url('/ruth-gold-r-logo.png') !important;
-  object-fit:contain !important;
-}
-
-
-/* Ruth interaction polish - theme unchanged */
-button,.btn,.icon-btn,.top-icon,.nav-item,.module,.metric.route-card,.quick-row,.conversation,.customer-row,.product-row,.order-row{
-  -webkit-tap-highlight-color:transparent;
-  user-select:none;
-}
-.btn,.icon-btn,.top-icon,.nav-item,.module,.metric.route-card,.quick-row,.conversation,.customer-row,.product-row,.order-row{
-  will-change:transform,box-shadow,filter,background;
-  transition:
-    transform .16s cubic-bezier(.2,.8,.2,1),
-    box-shadow .18s ease,
-    border-color .18s ease,
-    background .18s ease,
-    filter .18s ease !important;
-}
-.metric.route-card{
-  cursor:pointer;
-  outline:none;
-}
-.metric.route-card:hover{
-  transform:translateY(-2px);
-  border-color:rgba(212,162,55,.34) !important;
-  background:
-    radial-gradient(circle at 85% 8%,rgba(240,198,107,.075),transparent 32%),
-    linear-gradient(180deg,rgba(255,255,255,.055),rgba(255,255,255,.018)) !important;
-  box-shadow:0 18px 42px rgba(0,0,0,.22),0 0 0 1px rgba(212,162,55,.055) !important;
-}
-.metric.route-card:focus-visible,.module:focus-visible,.btn:focus-visible,.nav-item:focus-visible{
-  outline:2px solid rgba(240,198,107,.55);
-  outline-offset:3px;
-}
-.btn.is-pressing,.icon-btn.is-pressing,.top-icon.is-pressing,.nav-item.is-pressing,.module.is-pressing,.metric.route-card.is-pressing,.quick-row.is-pressing,.conversation.is-pressing,.customer-row.is-pressing,.product-row.is-pressing,.order-row.is-pressing,
-.btn:active,.icon-btn:active,.top-icon:active,.nav-item:active,.module:active,.metric.route-card:active,.quick-row:active,.conversation:active,.customer-row:active,.product-row:active,.order-row:active{
-  transform:translateY(2px) scale(.985) !important;
-  filter:brightness(.94) saturate(.96);
-  box-shadow:inset 0 3px 9px rgba(0,0,0,.34),0 7px 18px rgba(0,0,0,.18) !important;
-}
-.btn.gold{
-  position:relative;
-  overflow:hidden;
-  color:#130c03 !important;
-  border:1px solid rgba(255,224,151,.62) !important;
-  background:
-    linear-gradient(180deg,#ffe3a1 0%,#e7bd61 38%,#b9842b 100%) !important;
-  box-shadow:
-    0 12px 26px rgba(212,162,55,.20),
-    inset 0 1px 0 rgba(255,255,255,.54),
-    inset 0 -1px 0 rgba(91,55,12,.22) !important;
-  text-shadow:0 1px 0 rgba(255,255,255,.24);
-}
-.btn.gold:before{
-  content:"";
-  position:absolute;
-  inset:1px 1px auto 1px;
-  height:46%;
-  border-radius:inherit;
-  background:linear-gradient(180deg,rgba(255,255,255,.38),rgba(255,255,255,0));
-  pointer-events:none;
-}
-.btn.gold:after{
-  content:"";
-  position:absolute;
-  top:-70%;
-  bottom:-70%;
-  left:-45%;
-  width:36%;
-  transform:rotate(24deg);
-  background:linear-gradient(90deg,transparent,rgba(255,255,255,.34),transparent);
-  opacity:0;
-  pointer-events:none;
-}
-.btn.gold:hover{
-  border-color:rgba(255,232,172,.78) !important;
-  background:
-    linear-gradient(180deg,#ffeab8 0%,#edc873 42%,#c08c34 100%) !important;
-  box-shadow:
-    0 16px 34px rgba(212,162,55,.28),
-    inset 0 1px 0 rgba(255,255,255,.62),
-    inset 0 -1px 0 rgba(91,55,12,.18) !important;
-}
-.btn.gold:hover:after{
-  animation:ruthButtonShine .8s ease both;
-  opacity:1;
-}
-.btn.gold.is-pressing,.btn.gold:active{
-  background:
-    linear-gradient(180deg,#d9aa4f 0%,#b77e27 100%) !important;
-  box-shadow:
-    inset 0 4px 12px rgba(76,44,8,.45),
-    0 5px 15px rgba(0,0,0,.20) !important;
-}
-.module .btn.gold{
-  border-radius:999px !important;
-  padding:11px 18px !important;
-}
-@keyframes ruthButtonShine{
-  from{left:-55%}
-  to{left:118%}
-}
-@media (prefers-reduced-motion:reduce){
-  .btn,.icon-btn,.top-icon,.nav-item,.module,.metric.route-card,.quick-row,.conversation,.customer-row,.product-row,.order-row{transition:none!important}
-  .btn.gold:hover:after{animation:none}
-}
-
-
-/* Ruth luxury outline gold button */
-.btn.gold{
-  position:relative;
-  overflow:hidden;
-  min-height:46px;
-  padding:13px 24px !important;
-  border-radius:0 !important;
-  border:1.5px solid #d6b36a !important;
-  background:transparent !important;
-  color:#e7c77a !important;
-  font-family:Georgia,"Times New Roman",serif !important;
-  font-size:13px !important;
-  font-weight:500 !important;
-  letter-spacing:.34em !important;
-  text-transform:uppercase !important;
-  line-height:1 !important;
-  box-shadow:none !important;
-  text-shadow:none !important;
-}
-.btn.gold:before{
-  content:"";
-  position:absolute;
-  inset:0;
-  background:linear-gradient(180deg,#f1d78c 0%,#c79a3a 100%);
-  transform:scaleY(0);
-  transform-origin:bottom;
-  transition:transform .18s cubic-bezier(.2,.8,.2,1);
-  z-index:0;
-  pointer-events:none;
-}
-.btn.gold:after{display:none !important}
-.btn.gold > *,.btn.gold{
-  isolation:isolate;
-}
-.btn.gold:hover{
-  color:#130c03 !important;
-  border-color:#f0d992 !important;
-  background:transparent !important;
-  box-shadow:0 10px 24px rgba(212,162,55,.16) !important;
-}
-.btn.gold:hover:before{
-  transform:scaleY(1);
-}
-.btn.gold.is-pressing,.btn.gold:active{
-  transform:translateY(2px) scale(.985) !important;
-  color:#130c03 !important;
-  border-color:#b9872f !important;
-  background:#c79a3a !important;
-  box-shadow:inset 0 3px 10px rgba(75,45,8,.38),0 4px 12px rgba(0,0,0,.18) !important;
-}
-.btn.gold.is-pressing:before,.btn.gold:active:before{
-  transform:scaleY(1);
-}
-.module .btn.gold{
-  border-radius:0 !important;
-  min-width:210px !important;
-  padding:14px 22px !important;
-}
-
-
-/* Ruth refined outline button sizing/font */
-.btn.gold{
-  display:inline-flex !important;
-  align-items:center !important;
-  justify-content:center !important;
-  gap:8px !important;
-  box-sizing:border-box !important;
-  min-height:42px !important;
-  max-width:100% !important;
-  padding:12px 20px !important;
-  border-radius:0 !important;
-  border:1.5px solid #d6b36a !important;
-  background:transparent !important;
-  color:#e8c978 !important;
-  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif !important;
-  font-size:12px !important;
-  font-weight:850 !important;
-  letter-spacing:.18em !important;
-  text-transform:uppercase !important;
-  line-height:1 !important;
-  white-space:nowrap !important;
-  overflow:hidden !important;
-  text-overflow:ellipsis !important;
-  box-shadow:none !important;
-  text-shadow:none !important;
-}
-.btn.gold:before{
-  content:"";
-  position:absolute;
-  inset:0;
-  background:linear-gradient(180deg,#f3d98d 0%,#cf9f3d 100%);
-  transform:scaleY(0);
-  transform-origin:bottom;
-  transition:transform .18s cubic-bezier(.2,.8,.2,1);
-  z-index:-1;
-  pointer-events:none;
-}
-.btn.gold:after{display:none !important}
-.btn.gold:hover{
-  color:#120c03 !important;
-  border-color:#f0d992 !important;
-  background:transparent !important;
-  box-shadow:0 10px 24px rgba(212,162,55,.16) !important;
-}
-.btn.gold:hover:before{transform:scaleY(1)}
-.btn.gold.is-pressing,.btn.gold:active{
-  transform:translateY(2px) scale(.985) !important;
-  color:#120c03 !important;
-  border-color:#b9872f !important;
-  background:#c79a3a !important;
-  box-shadow:inset 0 3px 10px rgba(75,45,8,.38),0 4px 12px rgba(0,0,0,.18) !important;
-}
-.btn.gold.is-pressing:before,.btn.gold:active:before{transform:scaleY(1)}
-.module .btn.gold{
-  width:min(100%,190px) !important;
-  min-width:0 !important;
-  margin-top:18px !important;
-  padding:12px 14px !important;
-  font-size:11px !important;
-  letter-spacing:.145em !important;
-}
-.login-card .btn.gold{
-  width:100% !important;
-  padding:13px 18px !important;
-  font-size:12px !important;
-  letter-spacing:.16em !important;
-}
-.btn.full.btn.gold{
-  width:100% !important;
-}
-@media(max-width:820px){
-  .btn.gold{
-    min-height:40px !important;
-    padding:11px 16px !important;
-    font-size:11px !important;
-    letter-spacing:.14em !important;
-  }
-  .module .btn.gold{
-    width:min(100%,180px) !important;
-    padding:11px 12px !important;
-    font-size:10.5px !important;
-    letter-spacing:.11em !important;
-  }
-}
-
-
-/* Ruth clean sharp button typography */
-html,body,button,.btn{
-  -webkit-font-smoothing:antialiased;
-  -moz-osx-font-smoothing:grayscale;
-  text-rendering:geometricPrecision;
-}
-.btn.gold{
-  min-height:44px !important;
-  padding:12px 22px !important;
-  border-radius:0 !important;
-  border:1.5px solid #d8b66f !important;
-  background:transparent !important;
-  color:#e9cc82 !important;
-  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif !important;
-  font-size:13px !important;
-  font-weight:700 !important;
-  letter-spacing:.105em !important;
-  text-transform:uppercase !important;
-  line-height:1.1 !important;
-  white-space:nowrap !important;
-  overflow:hidden !important;
-  text-overflow:ellipsis !important;
-  box-shadow:none !important;
-  text-shadow:none !important;
-  transform:translateZ(0);
-}
-.btn.gold:hover{
-  color:#140d03 !important;
-  border-color:#f1da96 !important;
-}
-.module .btn.gold{
-  width:min(100%,200px) !important;
-  min-width:0 !important;
-  margin-top:18px !important;
-  padding:12px 14px !important;
-  font-size:12px !important;
-  font-weight:700 !important;
-  letter-spacing:.075em !important;
-}
-.login-card .btn.gold,.btn.full.btn.gold{
-  width:100% !important;
-  font-size:13px !important;
-  letter-spacing:.095em !important;
-}
-.btn.gold.is-pressing,.btn.gold:active{
-  transform:translateY(2px) !important;
-}
-@media(max-width:820px){
-  .btn.gold{
-    min-height:42px !important;
-    padding:11px 16px !important;
-    font-size:12px !important;
-    letter-spacing:.075em !important;
-  }
-  .module .btn.gold{
-    width:min(100%,190px) !important;
-    font-size:11.5px !important;
-    letter-spacing:.055em !important;
-  }
-}
-
-
-/* Mobile live chat close button */
-.mobile-chat-actions{
-  display:none;
-}
-.mobile-close-chat{
-  min-height:42px;
-  justify-content:center;
-}
-@media(max-width:820px){
-  .support-grid{
-    height:auto !important;
-  }
-  #page-support .support-grid > .panel:nth-child(2){
-    min-height:calc(100dvh - 150px);
-  }
-  .mobile-chat-actions{
-    display:flex;
-    padding:10px 14px 0;
-    border-top:1px solid var(--line);
-    background:rgba(7,8,10,.72);
-    backdrop-filter:blur(12px);
-  }
-  .mobile-close-chat{
-    display:flex !important;
-    width:100%;
-    border-color:rgba(239,100,100,.34) !important;
-    color:#ffaaa4 !important;
-    background:rgba(239,100,100,.075) !important;
-    font-weight:780 !important;
-  }
-  .mobile-close-chat:not(:disabled):active,
-  .mobile-close-chat.is-pressing{
-    transform:translateY(2px) !important;
-    background:rgba(239,100,100,.16) !important;
-    box-shadow:inset 0 3px 10px rgba(0,0,0,.32) !important;
-  }
-  .mobile-close-chat:disabled{
-    opacity:.45 !important;
-  }
-  #closeConversation{
-    display:none !important;
-  }
-}
-
-
-/* Ruth FINAL outline gold buttons - forced */
-#loginPage .btn.gold,
-#app .btn.gold,
-.btn.gold{
-  position:relative !important;
-  isolation:isolate !important;
-  display:inline-flex !important;
-  align-items:center !important;
-  justify-content:center !important;
-  box-sizing:border-box !important;
-  min-height:42px !important;
-  max-width:100% !important;
-  padding:12px 20px !important;
-  border-radius:0 !important;
-  border:1.5px solid #d8b66f !important;
-  background:
-    linear-gradient(180deg,#f3d98d 0%,#cf9f3d 100%) left bottom / 100% 0 no-repeat,
-    transparent !important;
-  color:#e9cc82 !important;
-  font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif !important;
-  font-size:12.5px !important;
-  font-weight:720 !important;
-  letter-spacing:.08em !important;
-  text-transform:uppercase !important;
-  line-height:1.1 !important;
-  white-space:nowrap !important;
-  overflow:hidden !important;
-  text-overflow:ellipsis !important;
-  box-shadow:none !important;
-  text-shadow:none !important;
-  transition:
-    transform .14s cubic-bezier(.2,.8,.2,1),
-    background-size .18s cubic-bezier(.2,.8,.2,1),
-    color .16s ease,
-    border-color .16s ease,
-    box-shadow .16s ease,
-    filter .16s ease !important;
-  -webkit-font-smoothing:antialiased !important;
-  -moz-osx-font-smoothing:grayscale !important;
-  text-rendering:geometricPrecision !important;
-}
-#loginPage .btn.gold:before,#loginPage .btn.gold:after,
-#app .btn.gold:before,#app .btn.gold:after,
-.btn.gold:before,.btn.gold:after{
-  display:none !important;
-  content:none !important;
-}
-#loginPage .btn.gold:hover,
-#app .btn.gold:hover,
-.btn.gold:hover{
-  background-size:100% 100%,100% 100% !important;
-  color:#140d03 !important;
-  border-color:#f1da96 !important;
-  box-shadow:0 10px 24px rgba(212,162,55,.16) !important;
-  filter:none !important;
-}
-#loginPage .btn.gold.is-pressing,#loginPage .btn.gold:active,
-#app .btn.gold.is-pressing,#app .btn.gold:active,
-.btn.gold.is-pressing,.btn.gold:active{
-  transform:translateY(2px) !important;
-  background-size:100% 100%,100% 100% !important;
-  color:#120c03 !important;
-  border-color:#b9872f !important;
-  filter:brightness(.92) !important;
-  box-shadow:inset 0 3px 10px rgba(75,45,8,.38),0 4px 12px rgba(0,0,0,.18) !important;
-}
-#app .module .btn.gold{
-  width:min(100%,200px) !important;
-  min-width:0 !important;
-  max-width:200px !important;
-  margin-top:18px !important;
-  padding:12px 13px !important;
-  font-size:11.5px !important;
-  font-weight:720 !important;
-  letter-spacing:.055em !important;
-}
-#app .composer .btn.gold{
-  min-width:96px !important;
-  width:auto !important;
-  padding:12px 16px !important;
-  font-size:12px !important;
-  letter-spacing:.055em !important;
-}
-#loginPage .btn.gold,
-#app .btn.full.btn.gold{
-  width:100% !important;
-}
-#app .mobile-close-chat{
-  text-transform:none !important;
-  letter-spacing:.01em !important;
-}
-
-/* Homepage clickable card animation - forced */
-#page-overview .module.route-card,
-#page-overview .metric.route-card{
-  cursor:pointer !important;
-  transform:translateY(0) scale(1) !important;
-  transform-origin:center !important;
-  will-change:transform,box-shadow,filter !important;
-  transition:
-    transform .16s cubic-bezier(.2,.8,.2,1),
-    box-shadow .18s ease,
-    border-color .18s ease,
-    background .18s ease,
-    filter .18s ease !important;
-}
-#page-overview .module.route-card:hover{
-  transform:translateY(-4px) scale(1.006) !important;
-  border-color:rgba(216,182,111,.48) !important;
-  box-shadow:0 26px 62px rgba(0,0,0,.30),0 0 0 1px rgba(216,182,111,.06) !important;
-}
-#page-overview .metric.route-card:hover{
-  transform:translateY(-3px) scale(1.004) !important;
-  border-color:rgba(216,182,111,.36) !important;
-  box-shadow:0 18px 42px rgba(0,0,0,.22),0 0 0 1px rgba(216,182,111,.05) !important;
-}
-#page-overview .module.route-card.is-pressing,
-#page-overview .module.route-card:active,
-#page-overview .metric.route-card.is-pressing,
-#page-overview .metric.route-card:active{
-  transform:translateY(3px) scale(.985) !important;
-  filter:brightness(.92) !important;
-  box-shadow:inset 0 5px 14px rgba(0,0,0,.34),0 7px 18px rgba(0,0,0,.18) !important;
-}
-@media(max-width:820px){
-  #app .btn.gold,#loginPage .btn.gold{
-    min-height:40px !important;
-    padding:11px 15px !important;
-    font-size:11.5px !important;
-    letter-spacing:.055em !important;
-  }
-  #app .module .btn.gold{
-    width:min(100%,190px) !important;
-    max-width:190px !important;
-    font-size:11px !important;
-    letter-spacing:.035em !important;
-  }
-}
-
-
-/* Ruth FINAL sharp non-pixel button text */
-#app .btn.gold,
-#loginPage .btn.gold,
-.btn.gold{
-  position:relative !important;
-  top:0 !important;
-  transform:none !important;
-  will-change:auto !important;
-  backface-visibility:visible !important;
-  -webkit-transform:none !important;
-
-  min-height:44px !important;
-  padding:12px 20px !important;
-  border-radius:0 !important;
-  border:1.5px solid #d8b66f !important;
-  background:
-    linear-gradient(180deg,#f3d98d 0%,#cf9f3d 100%) left bottom / 100% 0 no-repeat,
-    transparent !important;
-
-  color:#e9cc82 !important;
-  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Arial,sans-serif !important;
-  font-size:13px !important;
-  font-weight:650 !important;
-  letter-spacing:.015em !important;
-  text-transform:none !important;
-  line-height:1.15 !important;
-  white-space:nowrap !important;
-
-  text-shadow:none !important;
-  filter:none !important;
-  -webkit-font-smoothing:antialiased !important;
-  -moz-osx-font-smoothing:grayscale !important;
-  text-rendering:optimizeLegibility !important;
-}
-#app .btn.gold:hover,
-#loginPage .btn.gold:hover,
-.btn.gold:hover{
-  transform:none !important;
-  -webkit-transform:none !important;
-  background-size:100% 100%,100% 100% !important;
-  color:#140d03 !important;
-  border-color:#f1da96 !important;
-  filter:none !important;
-  box-shadow:0 10px 24px rgba(212,162,55,.16) !important;
-}
-#app .btn.gold.is-pressing,
-#app .btn.gold:active,
-#loginPage .btn.gold.is-pressing,
-#loginPage .btn.gold:active,
-.btn.gold.is-pressing,
-.btn.gold:active{
-  top:2px !important;
-  transform:none !important;
-  -webkit-transform:none !important;
-  background-size:100% 100%,100% 100% !important;
-  color:#120c03 !important;
-  border-color:#b9872f !important;
-  filter:none !important;
-  box-shadow:inset 0 3px 10px rgba(75,45,8,.38),0 4px 12px rgba(0,0,0,.18) !important;
-}
-#app .module .btn.gold{
-  width:min(100%,202px) !important;
-  max-width:202px !important;
-  min-width:0 !important;
-  padding:12px 12px !important;
-  font-size:12.5px !important;
-  font-weight:650 !important;
-  letter-spacing:0 !important;
-}
-#app .composer .btn.gold{
-  min-width:96px !important;
-  width:auto !important;
-  padding:12px 16px !important;
-  font-size:13px !important;
-  letter-spacing:0 !important;
-}
-#loginPage .btn.gold,
-#app .btn.full.btn.gold{
-  width:100% !important;
-}
-
-/* Kart animasyonunda scale yok: yazı bulanıklaşmasın */
-#page-overview .module.route-card,
-#page-overview .metric.route-card{
-  transform:translateY(0) !important;
-  filter:none !important;
-}
-#page-overview .module.route-card:hover{
-  transform:translateY(-4px) !important;
-  filter:none !important;
-}
-#page-overview .metric.route-card:hover{
-  transform:translateY(-3px) !important;
-  filter:none !important;
-}
-#page-overview .module.route-card.is-pressing,
-#page-overview .module.route-card:active,
-#page-overview .metric.route-card.is-pressing,
-#page-overview .metric.route-card:active{
-  transform:translateY(3px) !important;
-  filter:none !important;
-}
-@media(max-width:820px){
-  #app .btn.gold,
-  #loginPage .btn.gold{
-    min-height:42px !important;
-    padding:11px 15px !important;
-    font-size:12.5px !important;
-    letter-spacing:0 !important;
-  }
-  #app .module .btn.gold{
-    width:min(100%,194px) !important;
-    max-width:194px !important;
-    font-size:12px !important;
-    letter-spacing:0 !important;
-  }
-}
-
-
-/* Ruth logo final fix */
-.brand-mark,
-.avatar{
-  background-image:none !important;
-  color:transparent !important;
-  font-size:0 !important;
-  line-height:0 !important;
-  overflow:hidden !important;
-  display:flex !important;
-  align-items:center !important;
-  justify-content:center !important;
-  background-color:#08090b !important;
-}
-.ruth-logo-img{
-  display:block !important;
-  width:72% !important;
-  height:72% !important;
-  max-width:72% !important;
-  max-height:72% !important;
-  object-fit:contain !important;
-  object-position:center !important;
-  pointer-events:none !important;
-  filter:drop-shadow(0 0 6px rgba(197,151,73,.18)) !important;
-}
-.avatar .ruth-logo-img,
-.ruth-avatar-img{
-  width:66% !important;
-  height:66% !important;
-  max-width:66% !important;
-  max-height:66% !important;
-}
-
 </style></head><body><h1>RUTH IKAS Fotoğrafsız Ürünler</h1>${busy}<div class="card"><p class="ok">Toplam ürün: ${products.length}</p><p class="ok">Fotoğraflı: ${withImage}</p><p class="ok">Fotoğrafsız: ${missing.length}</p><p class="muted">Bu listedeki ürünlerde eşleşen fotoğraf bulunamadı. Aday URL sütunu ürün adıyla tahmini sayfayı gösterir.</p></div><table><thead><tr><th>#</th><th>Ürün</th><th>Kategori</th><th>Slug tahmini</th><th>Aday URL</th></tr></thead><tbody>${rows || '<tr><td colspan="5">Fotoğrafsız ürün yok.</td></tr>'}</tbody></table></body></html>`);
       } catch (error) {
         return sendHtml(res, `<!doctype html><html><body><pre>${escapeHtmlServer(error && error.message ? error.message : "missing_images_error")}</pre></body></html>`, 500);
@@ -3486,7 +2821,239 @@ function adminHtml(serverAdmin) {
     @media(max-width:1180px){.layout-overview{grid-template-columns:1fr}.right-rail{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(2,1fr)}.modules,.bottom-grid{grid-template-columns:1fr}.support-grid,.crm-grid,.orders-grid{grid-template-columns:1fr;height:auto}.panel{min-height:360px}.page-head{align-items:flex-start;flex-direction:column}.head-tools{width:100%;justify-content:flex-start}.date-filter{width:100%}.date-select{flex:1;min-width:160px}.date-input{flex:1;min-width:130px}}
     @media(max-width:820px){body{overflow-y:auto;overflow-x:hidden}.app{display:block;height:auto;min-height:100dvh}.sidebar{position:fixed;left:0;top:0;bottom:0;width:286px;transform:translateX(-104%);box-shadow:var(--shadow)}.app.mobile-open .sidebar{transform:translateX(0)}.drawer-shade{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:35}.app.mobile-open .drawer-shade{display:block}.main{min-height:100dvh}.topbar{padding:0 14px}.mobile-menu{display:grid}.top-actions .top-icon:nth-child(1),.profile-copy{display:none}.content{padding:14px}.welcome{height:auto;display:block;padding:20px}.date-pill{margin-top:16px;width:100%}.metrics{grid-template-columns:1fr}.right-rail{grid-template-columns:1fr}.support-grid,.crm-grid{gap:12px}.modules{gap:12px}.module{min-height:170px}.bottom-grid{gap:12px}.message-space{min-height:360px}.msg{max-width:88%}.date-filter{display:grid;grid-template-columns:1fr}.date-custom{grid-template-columns:1fr auto 1fr}.date-filter.custom .date-custom{display:grid}}
 .pager{display:flex;align-items:center;justify-content:center;gap:8px;margin:16px 0 6px;flex-wrap:wrap}.pager button{min-width:36px;height:34px;border:1px solid var(--line);border-radius:9px;background:rgba(255,255,255,.035);color:var(--text);font-weight:780}.pager button:hover{border-color:rgba(212,162,55,.42);background:rgba(255,255,255,.065)}.pager button.active{background:linear-gradient(180deg,#efc86b,#b9862a);color:#130c03;border-color:#c99737}.pager button:disabled{opacity:.45;cursor:not-allowed}.search-box{min-width:220px;max-width:320px}.welcome .date-filter{margin-left:auto}.welcome .date-select,.welcome .date-input{background:#0c0d0f}@media(max-width:820px){.search-box{min-width:0;max-width:none;width:100%}.page-head{align-items:flex-start}.head-tools{width:100%;justify-content:stretch}.head-tools .btn,.head-tools .search-box{width:100%}.welcome .date-filter{margin-top:16px;width:100%;margin-left:0}.pager{justify-content:flex-start}.order-card,.product-card{overflow:hidden}}
-  </style>
+  
+
+/* Ruth ADMIN final logo + button fix */
+.brand-mark,
+.avatar{
+  background-image:none !important;
+  color:transparent !important;
+  font-size:0 !important;
+  line-height:0 !important;
+  overflow:hidden !important;
+  display:flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  background-color:#08090b !important;
+  flex:0 0 auto !important;
+}
+.brand-mark{
+  width:44px !important;
+  height:44px !important;
+  border-radius:50% !important;
+}
+.avatar{
+  width:42px !important;
+  height:42px !important;
+  border-radius:50% !important;
+}
+.ruth-logo-img{
+  display:block !important;
+  width:68% !important;
+  height:68% !important;
+  max-width:68% !important;
+  max-height:68% !important;
+  object-fit:contain !important;
+  object-position:center !important;
+  pointer-events:none !important;
+  filter:drop-shadow(0 0 5px rgba(197,151,73,.18)) !important;
+}
+.avatar .ruth-logo-img,
+.ruth-avatar-img{
+  width:64% !important;
+  height:64% !important;
+  max-width:64% !important;
+  max-height:64% !important;
+}
+
+/* all gold buttons: exact outline style */
+#loginPage .btn.gold,
+#app .btn.gold,
+.btn.gold{
+  position:relative !important;
+  top:0 !important;
+  transform:none !important;
+  will-change:auto !important;
+  backface-visibility:visible !important;
+  -webkit-transform:none !important;
+  isolation:isolate !important;
+
+  display:inline-flex !important;
+  align-items:center !important;
+  justify-content:center !important;
+  box-sizing:border-box !important;
+  min-height:44px !important;
+  max-width:100% !important;
+  padding:12px 20px !important;
+
+  border-radius:0 !important;
+  border:1.5px solid #d8b66f !important;
+  background:
+    linear-gradient(180deg,#f3d98d 0%,#cf9f3d 100%) left bottom / 100% 0 no-repeat,
+    transparent !important;
+
+  color:#e9cc82 !important;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Inter,Arial,sans-serif !important;
+  font-size:13px !important;
+  font-weight:650 !important;
+  letter-spacing:.015em !important;
+  text-transform:none !important;
+  line-height:1.15 !important;
+  white-space:nowrap !important;
+  overflow:hidden !important;
+  text-overflow:ellipsis !important;
+
+  box-shadow:none !important;
+  text-shadow:none !important;
+  filter:none !important;
+  -webkit-font-smoothing:antialiased !important;
+  -moz-osx-font-smoothing:grayscale !important;
+  text-rendering:optimizeLegibility !important;
+
+  transition:
+    top .12s ease,
+    background-size .18s cubic-bezier(.2,.8,.2,1),
+    color .16s ease,
+    border-color .16s ease,
+    box-shadow .16s ease !important;
+}
+#loginPage .btn.gold:before,#loginPage .btn.gold:after,
+#app .btn.gold:before,#app .btn.gold:after,
+.btn.gold:before,.btn.gold:after{
+  display:none !important;
+  content:none !important;
+}
+#loginPage .btn.gold:hover,
+#app .btn.gold:hover,
+.btn.gold:hover{
+  background-size:100% 100%,100% 100% !important;
+  color:#140d03 !important;
+  border-color:#f1da96 !important;
+  filter:none !important;
+  box-shadow:0 10px 24px rgba(212,162,55,.16) !important;
+}
+#loginPage .btn.gold.is-pressing,#loginPage .btn.gold:active,
+#app .btn.gold.is-pressing,#app .btn.gold:active,
+.btn.gold.is-pressing,.btn.gold:active{
+  top:2px !important;
+  transform:none !important;
+  -webkit-transform:none !important;
+  background-size:100% 100%,100% 100% !important;
+  color:#120c03 !important;
+  border-color:#b9872f !important;
+  filter:none !important;
+  box-shadow:inset 0 3px 10px rgba(75,45,8,.38),0 4px 12px rgba(0,0,0,.18) !important;
+}
+#app .module .btn.gold{
+  width:min(100%,202px) !important;
+  max-width:202px !important;
+  min-width:0 !important;
+  margin-top:18px !important;
+  padding:12px 12px !important;
+  font-size:12.5px !important;
+  font-weight:650 !important;
+  letter-spacing:0 !important;
+}
+#app .composer .btn.gold{
+  min-width:96px !important;
+  width:auto !important;
+  padding:12px 16px !important;
+  font-size:13px !important;
+  letter-spacing:0 !important;
+}
+#loginPage .btn.gold,
+#app .btn.full.btn.gold{
+  width:100% !important;
+}
+
+/* homepage cards press animation */
+#page-overview .module.route-card,
+#page-overview .metric.route-card{
+  cursor:pointer !important;
+  transform:translateY(0) !important;
+  filter:none !important;
+  will-change:transform,box-shadow !important;
+  transition:transform .16s cubic-bezier(.2,.8,.2,1), box-shadow .18s ease, border-color .18s ease, background .18s ease !important;
+}
+#page-overview .module.route-card:hover{
+  transform:translateY(-4px) !important;
+  border-color:rgba(216,182,111,.48) !important;
+  box-shadow:0 26px 62px rgba(0,0,0,.30),0 0 0 1px rgba(216,182,111,.06) !important;
+}
+#page-overview .metric.route-card:hover{
+  transform:translateY(-3px) !important;
+  border-color:rgba(216,182,111,.36) !important;
+  box-shadow:0 18px 42px rgba(0,0,0,.22),0 0 0 1px rgba(216,182,111,.05) !important;
+}
+#page-overview .module.route-card.is-pressing,
+#page-overview .module.route-card:active,
+#page-overview .metric.route-card.is-pressing,
+#page-overview .metric.route-card:active{
+  transform:translateY(3px) !important;
+  filter:none !important;
+  box-shadow:inset 0 5px 14px rgba(0,0,0,.34),0 7px 18px rgba(0,0,0,.18) !important;
+}
+
+/* mobile live chat close button */
+.mobile-chat-actions{
+  display:none;
+}
+.mobile-close-chat{
+  min-height:42px;
+  justify-content:center;
+}
+@media(max-width:820px){
+  .support-grid{
+    height:auto !important;
+  }
+  #page-support .support-grid > .panel:nth-child(2){
+    min-height:calc(100dvh - 150px);
+  }
+  .mobile-chat-actions{
+    display:flex;
+    padding:10px 14px 0;
+    border-top:1px solid var(--line);
+    background:rgba(7,8,10,.72);
+    backdrop-filter:blur(12px);
+  }
+  .mobile-close-chat{
+    display:flex !important;
+    width:100%;
+    border-color:rgba(239,100,100,.34) !important;
+    color:#ffaaa4 !important;
+    background:rgba(239,100,100,.075) !important;
+    font-weight:780 !important;
+    text-transform:none !important;
+    letter-spacing:.01em !important;
+  }
+  .mobile-close-chat:not(:disabled):active,
+  .mobile-close-chat.is-pressing{
+    top:2px !important;
+    background:rgba(239,100,100,.16) !important;
+    box-shadow:inset 0 3px 10px rgba(0,0,0,.32) !important;
+  }
+  .mobile-close-chat:disabled{
+    opacity:.45 !important;
+  }
+  #closeConversation{
+    display:none !important;
+  }
+
+  #app .btn.gold,#loginPage .btn.gold{
+    min-height:42px !important;
+    padding:11px 15px !important;
+    font-size:12.5px !important;
+    letter-spacing:0 !important;
+  }
+  #app .module .btn.gold{
+    width:min(100%,194px) !important;
+    max-width:194px !important;
+    font-size:12px !important;
+    letter-spacing:0 !important;
+  }
+}
+
+</style>
 </head>
 <body>
   <section id="loginPage" class="login-page">
