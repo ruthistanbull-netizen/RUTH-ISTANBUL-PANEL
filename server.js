@@ -2525,7 +2525,7 @@ function adminHtml() {
   function api(path,opts){opts=opts||{}; opts.headers=opts.headers||{}; opts.credentials='same-origin'; opts.headers['Content-Type']='application/json'; if(token) opts.headers.Authorization='Bearer '+token; return fetch(path,opts).then(function(r){return r.text().then(function(t){var d={}; try{d=t?JSON.parse(t):{}}catch(e){} if(!r.ok){if(r.status===401 && path==='/api/admin/me') logout(false); throw new Error(d.error||d.message||'İstek başarısız')} return d})})}
   function toast(msg){var el=$('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(function(){el.classList.remove('show')},2200)}
   function prettifyUser(u){u=String(u||'Yönetici').trim(); return u?u.charAt(0).toLocaleUpperCase('tr-TR')+u.slice(1):'Yönetici'}
-  function loadMe(){api('/api/admin/me').then(function(me){var name=prettifyUser(me&&me.user&&me.user.username); setText('welcomeUser',name); setText('profileName',name)}).catch(function(){})}
+  function loadMe(){var headers={}; if(token) headers.Authorization='Bearer '+token; fetch('/api/admin/me',{headers:headers,credentials:'same-origin'}).then(function(r){return r.ok?r.json():null}).then(function(me){if(!me)return; var name=prettifyUser(me&&me.user&&me.user.username); setText('welcomeUser',name); setText('profileName',name)}).catch(function(){})}
 
   function showApp(){ $('loginPage').classList.add('hidden'); $('app').classList.remove('hidden'); loadMe(); initDateFilters(); setRoute(routeFromPath(),false); loadAll(); }
   function logout(push){token=''; localStorage.removeItem('ruth_admin_token'); try{fetch('/api/admin/logout',{method:'POST',credentials:'same-origin'}).catch(function(){})}catch(e){} $('app').classList.add('hidden'); $('loginPage').classList.remove('hidden'); if(push!==false) history.replaceState(null,'','/admin/'); }
@@ -2644,9 +2644,20 @@ function adminHtml() {
         return r.json();
       })
       .then(function(){
-        showApp();
-      })
-      .catch(function(){
+        // ÖNEMLİ: showApp içindeki panel/ikas yükleme hataları auth hatası değildir.
+        // Daha önce panel açılıp tekrar girişe atmasının sebebi buydu:
+        // showApp hata verince .catch çalışıyor, token siliniyordu.
+        try {
+          showApp();
+        } catch (error) {
+          console.error('Panel açılış hatası:', error);
+          $('loginPage').classList.add('hidden');
+          $('app').classList.remove('hidden');
+          setText('welcomeUser', 'Görkem');
+          setText('profileName', 'Görkem');
+          toast('Panel açıldı, bazı bölümler yüklenemedi.');
+        }
+      }, function(){
         token = '';
         localStorage.removeItem('ruth_admin_token');
         $('loginPage').classList.remove('hidden');
