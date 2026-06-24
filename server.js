@@ -157,7 +157,7 @@ const server = http.createServer(async (req, res) => {
           name: p.name || "",
           categoryNames: p.categoryNames || [],
           slugGuess: slugifyForUrl(p.name || ""),
-          candidateUrl: (buildStorefrontProductUrlCandidates({ name: p.name || "", baseName: p.name || "", slug: p.slug || "" })[0]) || (p.name ? new URL("/" + slugifyForUrl(p.name), IKAS_STOREFRONT_URL).toString() : "")
+          candidateUrl: (() => { const item = { name: p.name || "", baseName: p.name || "", slug: p.slug || "" }; const manual = getManualRuthProductUrlOverride(item); if (manual === "__UNPUBLISHED__") return "Sitede yayında görünmüyor"; return (buildStorefrontProductUrlCandidates(item)[0]) || (p.name ? new URL("/" + slugifyForUrl(p.name), IKAS_STOREFRONT_URL).toString() : ""); })()
         }));
         return sendJson(res, {
           ok: true,
@@ -188,9 +188,11 @@ const server = http.createServer(async (req, res) => {
         const withImage = products.filter((p) => p.image).length;
         const rows = missing.map((p, index) => {
           const slug = slugifyForUrl(p.name || "");
-          const candidates = buildStorefrontProductUrlCandidates({ name: p.name || "", baseName: p.name || "", slug: p.slug || "" }).slice(0, 8);
-          const candidate = candidates[0] || (p.name ? new URL("/" + slug, IKAS_STOREFRONT_URL).toString() : "");
-          const candidateLinks = candidates.length ? candidates.map((u) => `<a href="${escapeHtmlServer(u)}" target="_blank">${escapeHtmlServer(u)}</a>`).join("<br>") : (candidate ? `<a href="${escapeHtmlServer(candidate)}" target="_blank">${escapeHtmlServer(candidate)}</a>` : "-");
+          const item = { name: p.name || "", baseName: p.name || "", slug: p.slug || "" };
+          const manual = getManualRuthProductUrlOverride(item);
+          const candidates = buildStorefrontProductUrlCandidates(item).slice(0, 8);
+          const candidate = candidates[0] || (manual === "__UNPUBLISHED__" ? "" : (p.name ? new URL("/" + slug, IKAS_STOREFRONT_URL).toString() : ""));
+          const candidateLinks = manual === "__UNPUBLISHED__" ? "Sitede yayında görünmüyor" : (candidates.length ? candidates.map((u) => `<a href="${escapeHtmlServer(u)}" target="_blank">${escapeHtmlServer(u)}</a>`).join("<br>") : (candidate ? `<a href="${escapeHtmlServer(candidate)}" target="_blank">${escapeHtmlServer(candidate)}</a>` : "-"));
           const cats = (p.categoryNames || []).join(", ");
           return `<tr><td>${index + 1}</td><td>${escapeHtmlServer(p.name || "")}</td><td>${escapeHtmlServer(cats || "-")}</td><td>${escapeHtmlServer(slug)}</td><td style="word-break:break-all">${candidateLinks}</td></tr>`;
         }).join("");
@@ -1529,6 +1531,54 @@ const RUTH_PRODUCT_SLUG_MAP = new Map([
   ["eros", ["eros"]]
 ]);
 
+
+const RUTH_MANUAL_PRODUCT_URL_OVERRIDES = new Map([
+  ["the sign eon icon", "https://ruthistanbul.com/the-sign-eon-icon"],
+  ["the-sign-eon-icon", "https://ruthistanbul.com/the-sign-eon-icon"],
+  ["sign-eon-icon", "https://ruthistanbul.com/the-sign-eon-icon"],
+  ["the crystal path bracelet", "https://ruthistanbul.com/crystal-path"],
+  ["the gemston ring", "https://ruthistanbul.com/gemston"],
+  ["the night path necklace", "__UNPUBLISHED__"],
+  ["the obsidian sun necklace", "https://ruthistanbul.com/the-obsidian-sun-amulet-ham-ve-organik-formuyla-bohem-ruha-seslenirken-merkezindeki-parlak-motiflerle-umudu-ve-isigi-temsil-ediyor-oksitli-koyu-gri-siyah-zeminin-uzerine-islenmis-b"],
+  ["the siren's scroll necklace", "https://ruthistanbul.com/the-sirens-scroll-necklace-ile-doganin-kivrimli-akiskan-formlarini-boynunuza-tasiyin-duzensiz-ham-hatli-kolye-ucu-uzerinde-yer-alan-detayli-kivrimli-motif-mistik-ve-sucul-bir-hava"],
+  ["the sirens scroll necklace", "https://ruthistanbul.com/the-sirens-scroll-necklace-ile-doganin-kivrimli-akiskan-formlarini-boynunuza-tasiyin-duzensiz-ham-hatli-kolye-ucu-uzerinde-yer-alan-detayli-kivrimli-motif-mistik-ve-sucul-bir-hava"],
+  ["the sunrise necklace", "https://ruthistanbul.com/the-sunrise-fan-necklace"],
+  ["the trilogy of sun: antik formlar seti", "__UNPUBLISHED__"],
+  ["gardēdis", "https://ruthistanbul.com/garddis"],
+  ["gardedis", "https://ruthistanbul.com/garddis"],
+  ["mâ", "https://ruthistanbul.com/ma-"],
+  ["ma", "https://ruthistanbul.com/ma-"],
+  ["crystal-path-bracelet", "https://ruthistanbul.com/crystal-path"],
+  ["gemston-ring", "https://ruthistanbul.com/gemston"],
+  ["night-path-necklace", "__UNPUBLISHED__"],
+  ["obsidian-sun-necklace", "https://ruthistanbul.com/the-obsidian-sun-amulet-ham-ve-organik-formuyla-bohem-ruha-seslenirken-merkezindeki-parlak-motiflerle-umudu-ve-isigi-temsil-ediyor-oksitli-koyu-gri-siyah-zeminin-uzerine-islenmis-b"],
+  ["sirens-scroll-necklace", "https://ruthistanbul.com/the-sirens-scroll-necklace-ile-doganin-kivrimli-akiskan-formlarini-boynunuza-tasiyin-duzensiz-ham-hatli-kolye-ucu-uzerinde-yer-alan-detayli-kivrimli-motif-mistik-ve-sucul-bir-hava"],
+  ["sunrise-necklace", "https://ruthistanbul.com/the-sunrise-fan-necklace"],
+  ["trilogy-of-sun-antik-formlar-seti", "__UNPUBLISHED__"],
+  ["ma-", "https://ruthistanbul.com/ma-"]
+]);
+
+function getManualRuthProductUrlOverride(item) {
+  const keys = [];
+  [item && item.name, item && item.baseName].forEach((value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    keys.push(raw.toLowerCase());
+    keys.push(normalizeLookupText(raw));
+    keys.push(normalizeSlug(raw));
+  });
+  [item && item.slug, item && item.productSlug, item && item.handle].forEach((value) => {
+    const raw = String(value || '').trim();
+    if (!raw) return;
+    keys.push(raw.toLowerCase());
+    keys.push(normalizeSlug(raw));
+  });
+  for (const key of keys) {
+    if (key && RUTH_MANUAL_PRODUCT_URL_OVERRIDES.has(key)) return RUTH_MANUAL_PRODUCT_URL_OVERRIDES.get(key);
+  }
+  return '';
+}
+
 function getMappedRuthProductSlugs(slugs) {
   const mappedPriority = [];
   const existing = [...slugs];
@@ -1623,6 +1673,8 @@ async function enrichIkasImagesDirectFromProductPages(orders, products, categori
 }
 
 function buildStorefrontProductUrlCandidates(item) {
+  const manualOverride = getManualRuthProductUrlOverride(item);
+  if (manualOverride === "__UNPUBLISHED__") return [];
   const slugs = [];
   const pushSlug = (value) => {
     const raw = String(value || "").trim();
@@ -1670,6 +1722,7 @@ function buildStorefrontProductUrlCandidates(item) {
   const mappedPriority = getMappedRuthProductSlugs(slugs);
   const unique = [...new Set([...mappedPriority, ...slugs])].slice(0, 36);
   const urls = [];
+  if (manualOverride && /^https?:\/\//i.test(manualOverride)) urls.push(manualOverride);
   unique.forEach((slug) => {
     if (/^https?:\/\//i.test(slug)) {
       urls.push(slug);
