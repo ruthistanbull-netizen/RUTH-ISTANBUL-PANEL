@@ -467,7 +467,7 @@ async function getIkasAccessToken() {
   return ikasTokenCache.token;
 }
 
-async function ikasGraphQL(query, variables = {}) {
+async function ikasGraphQL(query, variables = {}, label = "ikas") {
   const token = await getIkasAccessToken();
   const response = await fetch(IKAS_GRAPHQL_URL, {
     method: "POST",
@@ -483,131 +483,143 @@ async function ikasGraphQL(query, variables = {}) {
   try { data = text ? JSON.parse(text) : {}; } catch (error) {}
 
   if (!response.ok) {
-    throw new Error(`ikas graphql HTTP ${response.status}: ${String(text || "").slice(0, 220)}`);
+    throw new Error(`${label} HTTP ${response.status}: ${String(text || "").slice(0, 500)}`);
   }
   if (data.errors && data.errors.length) {
-    throw new Error(`ikas graphql: ${data.errors.map((item) => item.message || JSON.stringify(item)).join(" | ").slice(0, 240)}`);
+    const details = data.errors.map((item) => {
+      const ext = item && item.extensions ? ` ${JSON.stringify(item.extensions).slice(0, 220)}` : "";
+      return `${item.message || JSON.stringify(item)}${ext}`;
+    }).join(" | ");
+    throw new Error(`${label}: ${details.slice(0, 700)}`);
   }
   return data.data || {};
 }
 
 async function fetchIkasOrders() {
-  const query = `
-    query RuthListOrders {
-      listOrder(sort: "orderedAt:desc", pagination: { page: 0, limit: 250 }) {
-        data {
-          id
-          orderNumber
-          orderedAt
-          createdAt
-          updatedAt
-          status
-          orderPackageStatus
-          orderPaymentStatus
-          totalFinalPrice
-          totalPrice
-          currencySymbol
-          currencyCode
-          customer { id fullName firstName lastName email phone }
-          shippingAddress { firstName lastName phone city { name } district { name } }
-          orderPackages { id orderPackageNumber orderPackageFulfillStatus trackingInfo { cargoCompany trackingNumber trackingLink } }
-          orderLineItems {
-            id
-            quantity
-            status
-            finalPrice
-            price
-            options { name values { name value } }
-            variant {
-              id
-              name
-              sku
-              slug
-              productId
-              mainImageId
-              categories { id name }
-              variantValues { variantTypeName variantValueName }
-            }
-          }
-        }
+  const fullFields = `
+    id
+    orderNumber
+    orderSequence
+    orderedAt
+    createdAt
+    updatedAt
+    status
+    orderPackageStatus
+    orderPaymentStatus
+    totalFinalPrice
+    totalPrice
+    currencySymbol
+    currencyCode
+    customer { id fullName firstName lastName email phone isGuestCheckout }
+    shippingAddress { firstName lastName phone city { name } district { name } }
+    orderPackages { id orderPackageNumber orderPackageFulfillStatus trackingInfo { cargoCompany trackingNumber trackingLink } }
+    orderLineItems {
+      id
+      quantity
+      status
+      finalPrice
+      price
+      options { name values { name value } }
+      variant {
+        id
+        name
+        sku
+        slug
+        productId
+        mainImageId
+        categories { id name }
+        variantValues { variantTypeName variantValueName }
       }
     }
   `;
 
-  const data = await ikasGraphQL(query);
-  const rawOrders = data && data.listOrder && Array.isArray(data.listOrder.data) ? data.listOrder.data : [];
-  return normalizeIkasOrders(rawOrders);
+  const queries = [
+    { label: "ikas orders no-args", query: `query RuthListOrders { listOrder { data { ${fullFields} } } }` },
+    { label: "ikas orders pagination-page1", query: `query RuthListOrders { listOrder(pagination: { page: 1, limit: 250 }) { data { ${fullFields} } } }` },
+    { label: "ikas orders minimal", query: `query RuthListOrdersMinimal { listOrder { data { id orderNumber orderSequence orderedAt createdAt updatedAt status orderPackageStatus orderPaymentStatus totalFinalPrice totalPrice currencySymbol currencyCode customer { id fullName firstName lastName email phone } orderLineItems { id quantity status variant { id name sku productId mainImageId variantValues { variantTypeName variantValueName } } } orderPackages { id orderPackageFulfillStatus orderPackageNumber } } } }` }
+  ];
+
+  const errors = [];
+  for (const attempt of queries) {
+    try {
+      const data = await ikasGraphQL(attempt.query, {}, attempt.label);
+      const rawOrders = data && data.listOrder && Array.isArray(data.listOrder.data) ? data.listOrder.data : [];
+      return normalizeIkasOrders(rawOrders);
+    } catch (error) {
+      errors.push(error && error.message ? error.message : String(error));
+    }
+  }
+  throw new Error(errors.join(" || ").slice(0, 1200));
 }
 
 async function fetchIkasCategories() {
   if (!ikasConfigured()) return [];
-  const query = `
-    query RuthListCategories {
-      listCategory { id name imageId parentId categoryPath }
+  const queries = [
+    { label: "ikas categories full", query: `query RuthListCategories { listCategory { id name imageId parentId categoryPath } }` },
+    { label: "ikas categories minimal", query: `query RuthListCategoriesMinimal { listCategory { id name } }` }
+  ];
+  const errors = [];
+  for (const attempt of queries) {
+    try {
+      const data = await ikasGraphQL(attempt.query, {}, attempt.label);
+      const rows = Array.isArray(data && data.listCategory) ? data.listCategory : [];
+      return rows.map((category) => ({
+        id: valueOrEmpty(category.id),
+        name: valueOrEmpty(category.name) || "Koleksiyon",
+        parentId: valueOrEmpty(category.parentId),
+        imageId: valueOrEmpty(category.imageId),
+        image: buildIkasImageUrl(category.imageId),
+        categoryPath: Array.isArray(category.categoryPath) ? category.categoryPath : []
+      })).filter((category) => category.id || category.name);
+    } catch (error) {
+      errors.push(error && error.message ? error.message : String(error));
     }
-  `;
-  try {
-    const data = await ikasGraphQL(query);
-    const rows = Array.isArray(data && data.listCategory) ? data.listCategory : [];
-    return rows.map((category) => ({
-      id: valueOrEmpty(category.id),
-      name: valueOrEmpty(category.name) || "Koleksiyon",
-      parentId: valueOrEmpty(category.parentId),
-      imageId: valueOrEmpty(category.imageId),
-      image: buildIkasImageUrl(category.imageId),
-      categoryPath: Array.isArray(category.categoryPath) ? category.categoryPath : []
-    })).filter((category) => category.id || category.name);
-  } catch (error) {
-    console.error("ikas categories error:", error && error.message ? error.message : error);
-    return [];
   }
+  console.error("ikas categories error:", errors.join(" || ").slice(0, 600));
+  return [];
 }
 
 async function fetchIkasProducts(categories = []) {
   if (!ikasConfigured()) return [];
   const categoryMap = new Map((categories || []).map((category) => [String(category.id), category]));
 
-  const queryWithVariants = `
-    query RuthListProducts {
-      listProduct(sort: "updatedAt:desc", pagination: { page: 0, limit: 250 }) {
-        data {
-          id
-          name
-          createdAt
-          updatedAt
-          totalStock
-          categoryIds
-          variants {
-            id
-            name
-            sku
-            barcodeList
-            mainImageId
-            productId
-            variantValues { variantTypeName variantValueName }
-          }
-        }
-      }
+  const fullFields = `
+    id
+    name
+    createdAt
+    updatedAt
+    totalStock
+    categoryIds
+    categories { id name }
+    variants {
+      id
+      name
+      sku
+      barcodeList
+      mainImageId
+      productId
+      variantValues { variantTypeName variantValueName }
     }
   `;
 
-  const minimalQuery = `
-    query RuthListProductsMinimal {
-      listProduct(sort: "updatedAt:desc", pagination: { page: 0, limit: 250 }) {
-        data { id name createdAt updatedAt totalStock categoryIds variants { id name sku mainImageId productId } }
-      }
-    }
-  `;
+  const queries = [
+    { label: "ikas products no-args", query: `query RuthListProducts { listProduct { data { ${fullFields} } } }` },
+    { label: "ikas products pagination-page1", query: `query RuthListProducts { listProduct(pagination: { page: 1, limit: 250 }) { data { ${fullFields} } } }` },
+    { label: "ikas products minimal", query: `query RuthListProductsMinimal { listProduct { data { id name createdAt updatedAt totalStock categoryIds categories { id name } variants { id name sku mainImageId productId } } } }` },
+    { label: "ikas products official-minimal", query: `query RuthListProductsOfficialMinimal { listProduct { data { id name createdAt } } }` }
+  ];
 
-  let data;
-  try {
-    data = await ikasGraphQL(queryWithVariants);
-  } catch (error) {
-    console.error("ikas products variant query fallback:", error && error.message ? error.message : error);
-    data = await ikasGraphQL(minimalQuery);
+  const errors = [];
+  for (const attempt of queries) {
+    try {
+      const data = await ikasGraphQL(attempt.query, {}, attempt.label);
+      const rawProducts = data && data.listProduct && Array.isArray(data.listProduct.data) ? data.listProduct.data : [];
+      return normalizeIkasProducts(rawProducts, categoryMap);
+    } catch (error) {
+      errors.push(error && error.message ? error.message : String(error));
+    }
   }
-  const rawProducts = data && data.listProduct && Array.isArray(data.listProduct.data) ? data.listProduct.data : [];
-  return normalizeIkasProducts(rawProducts, categoryMap);
+  throw new Error(errors.join(" || ").slice(0, 1200));
 }
 
 function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
@@ -727,10 +739,17 @@ async function buildIkasSummary() {
   let orders = [];
   let products = [];
   let categories = [];
+  let orderError = "";
   let productError = "";
   let categoryError = "";
 
-  orders = await fetchIkasOrders();
+  try {
+    orders = await fetchIkasOrders();
+  } catch (error) {
+    orderError = error && error.message ? error.message : "siparişler çekilemedi";
+    console.error("ikas orders error:", orderError);
+    orders = [];
+  }
 
   try {
     categories = await fetchIkasCategories();
@@ -760,6 +779,7 @@ async function buildIkasSummary() {
   return {
     connected: true,
     updatedAt: new Date().toISOString(),
+    orderError,
     productError,
     categoryError,
     totals: {
@@ -797,7 +817,9 @@ function ikasDateSortValue(value) {
 }
 
 function orderNewestFirst(a, b) {
-  return Number(b.orderSort || ikasDateSortValue(b.orderedAt) || 0) - Number(a.orderSort || ikasDateSortValue(a.orderedAt) || 0);
+  const bt = Number(b.orderSort || ikasDateSortValue(b.orderedAt) || b.orderSequence || b.orderNumber || 0);
+  const at = Number(a.orderSort || ikasDateSortValue(a.orderedAt) || a.orderSequence || a.orderNumber || 0);
+  return bt - at;
 }
 
 function normalizeIkasOrders(rawOrders) {
@@ -819,6 +841,7 @@ function normalizeIkasOrders(rawOrders) {
       id: valueOrEmpty(order.id),
       number: order.orderNumber ? `#${order.orderNumber}` : valueOrEmpty(order.id).slice(0, 8),
       orderNumber: valueOrEmpty(order.orderNumber),
+      orderSequence: Number(order.orderSequence || order.orderNumber || 0),
       customer: customerName,
       phone: valueOrEmpty(order.customer && order.customer.phone) || valueOrEmpty(order.shippingAddress && order.shippingAddress.phone),
       email: valueOrEmpty(order.customer && order.customer.email),
@@ -831,7 +854,7 @@ function normalizeIkasOrders(rawOrders) {
       packageStatus: translatePackageStatus(order.orderPackageStatus || packageStatuses[0] || ""),
       paymentStatus: translatePaymentStatus(order.orderPaymentStatus),
       orderedAt: normalizeIkasDate(dateSource),
-      orderSort: ikasDateSortValue(dateSource),
+      orderSort: ikasDateSortValue(dateSource) || Number(order.orderSequence || order.orderNumber || 0),
       total: Number(order.totalFinalPrice ?? order.totalPrice ?? 0),
       currency: valueOrEmpty(order.currencySymbol) || valueOrEmpty(order.currencyCode) || "₺",
       items
