@@ -140,6 +140,41 @@ const server = http.createServer(async (req, res) => {
       return sendJson(res, { ok: true });
     }
 
+    if (req.method === "GET" && url.pathname === "/api/ikas/image-status") {
+      try {
+        const summary = await buildIkasSummary();
+        return sendJson(res, {
+          ok: true,
+          public: true,
+          products: (summary.products || []).length,
+          productsWithImage: (summary.products || []).filter((p) => p.image).length,
+          orders: (summary.orders || []).length,
+          orderItemsWithImage: (summary.orders || []).reduce((sum, o) => sum + (o.items || []).filter((i) => i.image).length, 0),
+          sampleProducts: (summary.products || []).slice(0, 15).map((p) => ({ name: p.name, image: p.image || "" })),
+          updatedAt: summary.updatedAt || "",
+          note: "Bu link login gerektirmez. productsWithImage 0'dan büyükse fotoğraflar bulunuyor demektir."
+        });
+      } catch (error) {
+        return sendJson(res, {
+          ok: false,
+          public: true,
+          error: error && error.message ? error.message : "image_status_error"
+        }, 500);
+      }
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/ikas/image-status.html") {
+      try {
+        const summary = await buildIkasSummary();
+        const products = summary.products || [];
+        const withImage = products.filter((p) => p.image).length;
+        const rows = products.slice(0, 30).map((p) => `<tr><td>${escapeHtmlServer(p.name || "")}</td><td>${p.image ? `<img src="${escapeHtmlServer(p.image)}" style="width:54px;height:54px;object-fit:cover;border-radius:10px">` : "Yok"}</td><td style="word-break:break-all">${escapeHtmlServer(p.image || "")}</td></tr>`).join("");
+        return sendHtml(res, `<!doctype html><html><head><meta charset="utf-8"><title>Ruth Image Status</title><style>body{background:#0b0b0c;color:#f4ead8;font-family:Arial;padding:24px}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #333;padding:10px;text-align:left}img{background:#222}.ok{color:#f1c76a}</style></head><body><h1>RUTH IKAS Fotoğraf Durumu</h1><p class="ok">Ürün: ${products.length} / Fotoğraflı: ${withImage}</p><p>Sipariş: ${(summary.orders || []).length}</p><table><thead><tr><th>Ürün</th><th>Foto</th><th>URL</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
+      } catch (error) {
+        return sendHtml(res, `<!doctype html><html><body><pre>${escapeHtmlServer(error && error.message ? error.message : "image_status_error")}</pre></body></html>`, 500);
+      }
+    }
+
     if (req.method === "POST" && url.pathname === "/api/admin/login") {
       return await handleLogin(req, res);
     }
@@ -2914,6 +2949,16 @@ function readJson(req, limit = 1_000_000) {
       if (!failed) reject(error);
     });
   });
+}
+
+function escapeHtmlServer(value) {
+  return String(value || "").replace(/[&<>"']/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+    "'": "&#039;"
+  }[char] || char));
 }
 
 function sendJson(res, payload, status = 200) {
