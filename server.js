@@ -87,7 +87,7 @@ const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_FETCH_STOREFRONT_IM
 let ikasTokenCache = { token: "", expiresAt: 0 };
 let storefrontImageCache = { expiresAt: 0, bySlug: new Map(), byName: new Map(), urls: [] };
 let ikasSummaryCache = { expiresAt: 0, value: null };
-const MAX_IMAGE_BYTES = Number(process.env.RUTH_MAX_IMAGE_BYTES || 5_000_000);
+const MAX_IMAGE_BYTES = Number(process.env.RUTH_MAX_IMAGE_BYTES || 10_000_000);
 const ADMIN_NOTIFICATION_TITLE = "RUTH ISTANBUL";
 
 fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -154,17 +154,31 @@ const server = http.createServer(async (req, res) => {
   } catch (error) {
     console.error("RUTH support error:", error && error.stack ? error.stack : error);
     if (!res.headersSent && !res.writableEnded) {
-      sendJson(res, { ok: false, error: "server_error" }, 500);
+      const code = error && error.statusCode ? error.statusCode : 500;
+      const key = error && error.message === "body_too_large" ? "body_too_large" : "server_error";
+      sendJson(res, { ok: false, error: key }, code);
     }
   }
 });
 
 async function handleCustomerMessage(req, res) {
-  const body = await readJson(req, 4_000_000);
+  const body = await readJson(req, 12_000_000);
   const sessionId = cleanSessionId(body.sessionId || createId("visitor"));
   const now = new Date().toISOString();
   const text = String(body.message || "").trim().slice(0, 2500);
-  const image = sanitizeImage(body.image);
+  let image = null;
+  try {
+    image = sanitizeImage(body.image);
+  } catch (error) {
+    if (error && error.message === "image_too_large") {
+      return sendJson(res, {
+        ok: false,
+        error: "image_too_large",
+        message: "Fotoğraf çok büyük. Lütfen daha küçük bir fotoğraf gönderin."
+      }, 413);
+    }
+    throw error;
+  }
   const pageUrl = String(body.pageUrl || "").slice(0, 1000);
   const pageTitle = String(body.pageTitle || "").slice(0, 300);
   const customerInfo = normalizeCustomerInfo(body.customerInfo || {});
@@ -2604,21 +2618,30 @@ function safeEqual(a, b) {
 function readJson(req, limit = 1_000_000) {
   return new Promise((resolve, reject) => {
     let raw = "";
+    let failed = false;
     req.on("data", (chunk) => {
+      if (failed) return;
       raw += chunk;
       if (raw.length > limit) {
-        reject(new Error("body_too_large"));
-        req.destroy();
+        failed = true;
+        const error = new Error("body_too_large");
+        error.statusCode = 413;
+        reject(error);
+        // Bağlantıyı sert kapatma; sert kapatma Render/Node tarafında socket hatası doğurabiliyor.
+        req.resume();
       }
     });
     req.on("end", () => {
+      if (failed) return;
       try {
         resolve(raw ? JSON.parse(raw) : {});
       } catch (error) {
         reject(error);
       }
     });
-    req.on("error", reject);
+    req.on("error", (error) => {
+      if (!failed) reject(error);
+    });
   });
 }
 
@@ -2774,7 +2797,9 @@ function sanitizeImage(image) {
   if (!/^data:image\/(png|jpe?g|webp|gif);base64,/i.test(data)) return null;
   const bytes = Buffer.byteLength(data, "utf8");
   if (bytes > MAX_IMAGE_BYTES) {
-    throw new Error("image_too_large");
+    const error = new Error("image_too_large");
+    error.statusCode = 413;
+    throw error;
   }
   return {
     name: String(image.name || "fotoğraf").slice(0, 160),
