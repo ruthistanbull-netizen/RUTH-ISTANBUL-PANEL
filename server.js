@@ -2569,10 +2569,14 @@ function adminHtml(serverAdmin) {
     if(typeof raw === 'object' && raw.data) raw = raw.data;
     raw = String(raw || '');
     if(!raw) return '';
-    if(/^data:image\//i.test(raw) || /^https?:\/\//i.test(raw)) return raw;
-    if(/^[A-Za-z0-9+/=\s]+$/.test(raw) && raw.length > 80){
+
+    var lower = raw.toLowerCase();
+    if(lower.indexOf('data:image/') === 0 || lower.indexOf('http://') === 0 || lower.indexOf('https://') === 0) return raw;
+
+    var compact = raw.replace(new RegExp(String.fromCharCode(92) + 's+', 'g'), '');
+    if(compact.length > 80 && compact.indexOf('<') < 0 && compact.indexOf('>') < 0){
       var mime = message.imageMime || message.image_mime || 'image/jpeg';
-      return 'data:' + mime + ';base64,' + raw.replace(/\s+/g,'');
+      return 'data:' + mime + ';base64,' + compact;
     }
     return '';
   }
@@ -2583,7 +2587,7 @@ function adminHtml(serverAdmin) {
       var img=adminImageSrc(m);
       var body=String(m.body||'').trim();
       var bodyHtml=body ? '<div class="msg-text">'+escapeHtml(body)+'</div>' : '';
-      var imgHtml=img ? '<a class="msg-photo-link" href="'+escapeAttr(img)+'" target="_blank" rel="noreferrer"><img class="chat-photo" src="'+escapeAttr(img)+'" alt="Sohbet fotoğrafı" loading="lazy" onerror="this.closest(\'.msg-photo-link\').innerHTML=\'<span class=&quot;preview&quot;>Fotoğraf yüklenemedi</span>\'"></a>' : '';
+      var imgHtml=img ? '<a class="msg-photo-link" href="'+escapeAttr(img)+'" target="_blank" rel="noreferrer"><img class="chat-photo" src="'+escapeAttr(img)+'" alt="Sohbet fotoğrafı" loading="lazy"></a>' : '';
       return '<div class="msg '+escapeHtml(m.sender)+'">'+bodyHtml+imgHtml+'<div class="meta">'+escapeHtml(m.sender)+' • '+fmtDate(m.createdAt)+'</div></div>';
     }).join('');
     el.scrollTop=el.scrollHeight;
