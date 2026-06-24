@@ -13,9 +13,10 @@ try {
 const PORT = Number(process.env.PORT || 8787);
 const DATA_DIR = process.env.RUTH_DATA_DIR || path.join(__dirname, "data");
 const PUBLIC_DIR = path.join(__dirname, "public");
-const ADMIN_USER = process.env.RUTH_ADMIN_USER || "ruth";
-const ADMIN_PASSWORD = process.env.RUTH_ADMIN_PASSWORD || "ruthistanbul";
-const SESSION_SECRET = process.env.RUTH_SESSION_SECRET || "change-this-secret-before-live";
+const ADMIN_USER = String(process.env.RUTH_ADMIN_USER || "ruth").trim();
+const ADMIN_PASSWORD = String(process.env.RUTH_ADMIN_PASSWORD || "ruthistanbul").trim();
+const ADMIN_USERS = parseAdminUsers(process.env.RUTH_ADMIN_USERS, ADMIN_USER, ADMIN_PASSWORD);
+const SESSION_SECRET = String(process.env.RUTH_SESSION_SECRET || "change-this-secret-before-live").trim() || "change-this-secret-before-live";
 const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || "";
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:info@ruthistanbul.com";
@@ -62,11 +63,11 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/chat") {
-      return handleCustomerMessage(req, res);
+      return await handleCustomerMessage(req, res);
     }
 
     if (req.method === "GET" && url.pathname === "/api/chat/updates") {
-      return handleCustomerUpdates(url, res);
+      return await handleCustomerUpdates(url, res);
     }
 
     if (req.method === "POST" && url.pathname === "/api/event") {
@@ -75,13 +76,13 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/api/admin/login") {
-      return handleLogin(req, res);
+      return await handleLogin(req, res);
     }
 
     if (url.pathname.startsWith("/api/admin/")) {
       const admin = requireAdmin(req, res);
       if (!admin) return;
-      return handleAdminApi(req, res, url);
+      return await handleAdminApi(req, res, url);
     }
 
     sendJson(res, { ok: false, error: "not_found" }, 404);
@@ -204,8 +205,8 @@ async function handleCustomerUpdates(url, res) {
 async function handleLogin(req, res) {
   const body = await readJson(req);
   const username = String(body.username || "").trim();
-  const password = String(body.password || "");
-  if (username !== ADMIN_USER || password !== ADMIN_PASSWORD) {
+  const password = String(body.password || "").trim();
+  if (!isValidAdminUser(username, password)) {
     return sendJson(res, { ok: false, error: "unauthorized" }, 401);
   }
 
@@ -217,9 +218,10 @@ async function handleAdminApi(req, res, url) {
   const pathname = url.pathname;
 
   if (req.method === "GET" && pathname === "/api/admin/me") {
+    const admin = verifyToken(String(req.headers.authorization || "").startsWith("Bearer ") ? String(req.headers.authorization || "").slice(7) : "");
     return sendJson(res, {
       ok: true,
-      user: { username: ADMIN_USER },
+      user: { username: admin && admin.sub ? admin.sub : ADMIN_USERS[0].username },
       pushReady: Boolean(webPush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY),
       vapidPublicKey: VAPID_PUBLIC_KEY || ""
     });
@@ -915,11 +917,11 @@ function adminHtml() {
   function escapeHtml(v){return String(v||'').replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]})}
   function fmtDate(v){if(!v)return '-'; try{return new Date(v).toLocaleString('tr-TR',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}catch(e){return v}}
   function today(){try{return new Date().toLocaleDateString('tr-TR',{day:'2-digit',month:'long',year:'numeric'})}catch(e){return 'Bugün'}}
-  function api(path,opts){opts=opts||{}; opts.headers=opts.headers||{}; opts.headers['Content-Type']='application/json'; if(token) opts.headers.Authorization='Bearer '+token; return fetch(path,opts).then(function(r){return r.text().then(function(t){var d=t?JSON.parse(t):{}; if(!r.ok){if(r.status===401) logout(false); throw new Error(d.error||d.message||'İstek başarısız')} return d})})}
+  function api(path,opts){opts=opts||{}; opts.headers=opts.headers||{}; opts.headers['Content-Type']='application/json'; if(token) opts.headers.Authorization='Bearer '+token; return fetch(path,opts).then(function(r){return r.text().then(function(t){var d=t?JSON.parse(t):{}; if(!r.ok){if(r.status===401 && path!='/api/admin/login') logout(false); throw new Error(d.error||d.message||'İstek başarısız')} return d})})}
   function toast(msg){var el=$('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(function(){el.classList.remove('show')},2200)}
   function showApp(){ $('loginPage').classList.add('hidden'); $('app').classList.remove('hidden'); setText('todayText',today()); setRoute(routeFromPath(),false); loadAll(); }
   function logout(push){token=''; localStorage.removeItem('ruth_admin_token'); $('app').classList.add('hidden'); $('loginPage').classList.remove('hidden'); if(push!==false) history.replaceState(null,'','/admin/'); }
-  $('loginForm').addEventListener('submit',function(e){e.preventDefault(); setText('loginError',''); api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token; localStorage.setItem('ruth_admin_token',token); showApp();}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message)})});
+  $('loginForm').addEventListener('submit',function(e){e.preventDefault(); setText('loginError',''); api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token||''; if(!token){throw new Error('token alınamadı')} localStorage.setItem('ruth_admin_token',token); showApp();}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message)})});
   $('logoutBtn').addEventListener('click',function(){logout()});
   $('collapseBtn').addEventListener('click',function(){ $('app').classList.toggle('nav-mini') });
   $('deskMenuBtn').addEventListener('click',function(){ $('app').classList.toggle('nav-mini') });
@@ -968,7 +970,7 @@ function requireAdmin(req, res) {
   const header = String(req.headers.authorization || "");
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   const payload = verifyToken(token);
-  if (!payload || payload.sub !== ADMIN_USER) {
+  if (!payload || !isKnownAdmin(payload.sub)) {
     sendJson(res, { ok: false, error: "unauthorized" }, 401);
     return null;
   }
@@ -1170,6 +1172,34 @@ function createId(prefix) {
 
 function base64url(value) {
   return Buffer.from(String(value)).toString("base64url");
+}
+
+function parseAdminUsers(rawValue, fallbackUser, fallbackPassword) {
+  const raw = String(rawValue || "").trim();
+  const users = [];
+  if (raw) {
+    raw.split(",").forEach((pair) => {
+      const item = String(pair || "").trim();
+      if (!item) return;
+      const separator = item.indexOf(":");
+      if (separator <= 0) return;
+      const username = item.slice(0, separator).trim();
+      const password = item.slice(separator + 1).trim();
+      if (username && password) users.push({ username, password });
+    });
+  }
+  if (!users.length && fallbackUser && fallbackPassword) {
+    users.push({ username: fallbackUser, password: fallbackPassword });
+  }
+  return users;
+}
+
+function isValidAdminUser(username, password) {
+  return ADMIN_USERS.some((admin) => admin.username === username && admin.password === password);
+}
+
+function isKnownAdmin(username) {
+  return ADMIN_USERS.some((admin) => admin.username === username);
 }
 
 function trimSlash(value) {
