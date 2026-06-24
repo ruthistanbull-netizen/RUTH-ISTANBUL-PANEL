@@ -2370,7 +2370,7 @@ function adminHtml() {
           .then(function(data){
             if(!data.token) throw new Error('token alınamadı');
             localStorage.setItem('ruth_admin_token', data.token);
-            window.location.href = '/admin/';
+            location.reload();
           })
           .catch(function(err){
             if(errEl) errEl.textContent = 'Giriş başarısız: ' + (err && err.message ? err.message : err);
@@ -2521,7 +2521,7 @@ function adminHtml() {
 
   function showApp(){ $('loginPage').classList.add('hidden'); $('app').classList.remove('hidden'); loadMe(); initDateFilters(); setRoute(routeFromPath(),false); loadAll(); }
   function logout(push){token=''; localStorage.removeItem('ruth_admin_token'); $('app').classList.add('hidden'); $('loginPage').classList.remove('hidden'); if(push!==false) history.replaceState(null,'','/admin/'); }
-  on('loginForm','submit',function(e){e.preventDefault(); setText('loginError',''); var btn=document.querySelector('#loginForm button[type="submit"]'); if(btn)btn.disabled=true; api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token||''; if(!token){throw new Error('token alınamadı')} localStorage.setItem('ruth_admin_token',token); location.href='/admin/';}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message); if(btn)btn.disabled=false;})});
+  on('loginForm','submit',function(e){e.preventDefault(); setText('loginError',''); var btn=document.querySelector('#loginForm button[type="submit"]'); if(btn)btn.disabled=true; api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token||''; if(!token){throw new Error('token alınamadı')} localStorage.setItem('ruth_admin_token',token); location.reload();}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message); if(btn)btn.disabled=false;})});
   on('logoutBtn','click',function(){logout()});
   on('collapseBtn','click',function(){ $('app').classList.toggle('nav-mini') });
   on('deskMenuBtn','click',function(){ $('app').classList.toggle('nav-mini') });
@@ -2628,7 +2628,21 @@ function adminHtml() {
   function subscribePush(){ if(!('serviceWorker' in navigator)||!('PushManager' in window)){alert('Bu tarayıcı bildirim desteklemiyor.');return;} api('/api/admin/me').then(function(me){if(!me.vapidPublicKey)throw new Error('VAPID key yok'); return navigator.serviceWorker.register('/sw.js').then(function(reg){return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)})})}).then(function(sub){return api('/api/admin/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub})})}).then(function(){toast('Bildirimler açıldı')}).catch(function(err){alert('Bildirim açılamadı: '+err.message)})}
   function urlBase64ToUint8Array(base64String){var padding='='.repeat((4-base64String.length%4)%4); var base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/'); var raw=atob(base64); var arr=new Uint8Array(raw.length); for(var i=0;i<raw.length;++i)arr[i]=raw.charCodeAt(i); return arr}
   if(token){
-    api('/api/admin/me').then(function(){showApp()}).catch(function(){token=''; localStorage.removeItem('ruth_admin_token'); $('loginPage').classList.remove('hidden');});
+    fetch('/api/admin/me', {
+      headers: { Authorization: 'Bearer ' + token }
+    })
+    .then(function(r){
+      if(!r.ok) throw new Error('unauthorized');
+      return r.json();
+    })
+    .then(function(){
+      showApp();
+    })
+    .catch(function(){
+      token = '';
+      localStorage.removeItem('ruth_admin_token');
+      $('loginPage').classList.remove('hidden');
+    });
   } else {
     $('loginPage').classList.remove('hidden');
   }
@@ -2664,11 +2678,7 @@ function adminHtml() {
         .then(function(data){
           if(!data.token) throw new Error('token alınamadı');
           localStorage.setItem('ruth_admin_token', data.token);
-          // Token main panel scriptinin kendi içinde okunmalı.
-          // Bu yüzden giriş başarılı olunca aynı sayfada paneli açmaya çalışma;
-          // direkt yeniden yükle. Yoksa main script token değişkeni boş kalıp
-          // ilk admin isteğinde 401 alıyor ve tekrar girişe atıyor.
-          window.location.replace('/admin/');
+          window.location.href = '/admin/';
         })
         .catch(function(err){
           if(errEl) errEl.textContent = 'Giriş başarısız: ' + (err && err.message ? err.message : err);
