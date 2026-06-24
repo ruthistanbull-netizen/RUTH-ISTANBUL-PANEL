@@ -1084,7 +1084,7 @@ async function fetchIkasProducts(categories = []) {
   // Variant alanları mağazaya göre farklı çıktığı için ürün listesini patlatmamak adına burada çekmiyoruz.
   const attempts = [
     {
-      label: "ikas products variants-safe",
+      label: "ikas products variants-id-sku",
       fields: `
         id
         name
@@ -1092,7 +1092,17 @@ async function fetchIkasProducts(categories = []) {
         variants {
           id
           sku
-          variantValues { variantTypeName variantValueName }
+        }
+      `
+    },
+    {
+      label: "ikas products variants-id-only",
+      fields: `
+        id
+        name
+        categoryIds
+        variants {
+          id
         }
       `
     },
