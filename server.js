@@ -1267,7 +1267,7 @@ function buildCollectionsFromProducts(products, categories = []) {
 }
 
 async function buildIkasSummary() {
-  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 600000));
+  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 300000));
   if (cacheMs && ikasSummaryCache.value && ikasSummaryCache.expiresAt > Date.now()) {
     return ikasSummaryCache.value;
   }
@@ -1281,7 +1281,7 @@ async function buildIkasSummary() {
 }
 
 async function buildIkasSummaryFresh() {
-  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 600000));
+  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 300000));
   if (!ikasConfigured()) {
     return {
       connected: false,
@@ -1369,7 +1369,7 @@ async function buildIkasSummaryFresh() {
     collections,
     categories
   };
-  ikasSummaryCache = { expiresAt: Date.now() + Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 600000)), value: summary };
+  ikasSummaryCache = { expiresAt: Date.now() + Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 300000)), value: summary };
   return summary;
 }
 
@@ -1588,18 +1588,33 @@ function buildStorefrontProductUrlCandidates(item) {
 
   const names = [item.baseName, item.name].filter(Boolean);
   names.forEach((name) => {
-    const base = String(name || "").replace(/—.*$/g, "").replace(/\s+-\s+.*$/g, "").trim();
-    pushSlug(base);
-    // Ruth ürünlerinde bazı brass ürün URL'lerinde "the" düşebiliyor ve sona brass eklenebiliyor.
-    const withoutThe = base.replace(/^the\s+/i, "");
-    if (withoutThe !== base) pushSlug(withoutThe);
-    if (/ring|necklace|bracelet|set/i.test(base)) {
-      pushSlug(`${base} brass`);
-      if (withoutThe !== base) pushSlug(`${withoutThe} brass`);
-    }
+    const original = String(name || "").replace(/—.*$/g, "").replace(/\s+-\s+.*$/g, "").trim();
+    const variants = new Set();
+
+    const addNameVariant = (value) => {
+      const raw = String(value || "").trim();
+      if (!raw) return;
+      variants.add(raw);
+      variants.add(raw.replace(/\([^)]*\)/g, " ").trim());
+      variants.add(raw.replace(/ayarlanabilir/gi, " ").trim());
+      variants.add(raw.replace(/\([^)]*\)/g, " ").replace(/ayarlanabilir/gi, " ").trim());
+      variants.add(raw.replace(/[’'`´]/g, ""));
+    };
+
+    addNameVariant(original);
+    variants.forEach((base) => {
+      if (!base) return;
+      pushSlug(base);
+      const withoutThe = base.replace(/^the\s+/i, "");
+      if (withoutThe !== base) pushSlug(withoutThe);
+      if (/ring|necklace|bracelet|set|kolye|yüzük|yuzuk|bileklik/i.test(base)) {
+        pushSlug(`${base} brass`);
+        if (withoutThe !== base) pushSlug(`${withoutThe} brass`);
+      }
+    });
   });
 
-  const unique = [...new Set(slugs)].slice(0, 10);
+  const unique = [...new Set(slugs)].slice(0, 18);
   const urls = [];
   unique.forEach((slug) => {
     if (/^https?:\/\//i.test(slug)) {
@@ -1614,7 +1629,7 @@ function buildStorefrontProductUrlCandidates(item) {
       `/p/${slug}`
     ].forEach((path) => urls.push(new URL(path, IKAS_STOREFRONT_URL).toString()));
   });
-  return [...new Set(urls)].slice(0, 20);
+  return [...new Set(urls)].slice(0, 40);
 }
 
 async function enrichIkasImagesFromStorefront(orders, products, categories) {
@@ -1882,6 +1897,13 @@ function normalizeSlug(value) {
 
 function slugifyForUrl(value) {
   return String(value || "")
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/ayarlanabilir/gi, " ")
+    .replace(/[’'`´]/g, "")
+    .replace(/æ/gi, "ae")
+    .replace(/œ/gi, "oe")
+    .replace(/þ/gi, "th")
+    .replace(/ð/gi, "d")
     .toLocaleLowerCase("tr")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
