@@ -87,6 +87,7 @@ const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_PRODUCT_IMAGES_DISA
 let ikasTokenCache = { token: "", expiresAt: 0 };
 let storefrontImageCache = { expiresAt: 0, bySlug: new Map(), byName: new Map(), urls: [] };
 let ikasSummaryCache = { expiresAt: 0, value: null };
+let ikasSummaryInFlight = null;
 const MAX_IMAGE_BYTES = Number(process.env.RUTH_MAX_IMAGE_BYTES || 10_000_000);
 const ADMIN_NOTIFICATION_TITLE = "RUTH ISTANBUL";
 
@@ -142,18 +143,8 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/ikas/image-status") {
       try {
-        const summary = await buildIkasSummary();
-        return sendJson(res, {
-          ok: true,
-          public: true,
-          products: (summary.products || []).length,
-          productsWithImage: (summary.products || []).filter((p) => p.image).length,
-          orders: (summary.orders || []).length,
-          orderItemsWithImage: (summary.orders || []).reduce((sum, o) => sum + (o.items || []).filter((i) => i.image).length, 0),
-          sampleProducts: (summary.products || []).slice(0, 15).map((p) => ({ name: p.name, image: p.image || "" })),
-          updatedAt: summary.updatedAt || "",
-          note: "Bu link login gerektirmez. productsWithImage 0'dan büyükse fotoğraflar bulunuyor demektir."
-        });
+        const summary = await getFastIkasImageStatusSummary();
+        return sendJson(res, makeImageStatusPayload(summary));
       } catch (error) {
         return sendJson(res, {
           ok: false,
@@ -165,11 +156,12 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/api/ikas/image-status.html") {
       try {
-        const summary = await buildIkasSummary();
+        const summary = await getFastIkasImageStatusSummary();
         const products = summary.products || [];
         const withImage = products.filter((p) => p.image).length;
         const rows = products.slice(0, 30).map((p) => `<tr><td>${escapeHtmlServer(p.name || "")}</td><td>${p.image ? `<img src="${escapeHtmlServer(p.image)}" style="width:54px;height:54px;object-fit:cover;border-radius:10px">` : "Yok"}</td><td style="word-break:break-all">${escapeHtmlServer(p.image || "")}</td></tr>`).join("");
-        return sendHtml(res, `<!doctype html><html><head><meta charset="utf-8"><title>Ruth Image Status</title><style>body{background:#0b0b0c;color:#f4ead8;font-family:Arial;padding:24px}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #333;padding:10px;text-align:left}img{background:#222}.ok{color:#f1c76a}</style></head><body><h1>RUTH IKAS Fotoğraf Durumu</h1><p class="ok">Ürün: ${products.length} / Fotoğraflı: ${withImage}</p><p>Sipariş: ${(summary.orders || []).length}</p><table><thead><tr><th>Ürün</th><th>Foto</th><th>URL</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
+        const busy = summary.__busy ? `<p style="color:#f1c76a">Fotoğraf taraması devam ediyor. 20-30 saniye sonra yenile.</p>` : "";
+        return sendHtml(res, `<!doctype html><html><head><meta charset="utf-8"><title>Ruth Image Status</title><style>body{background:#0b0b0c;color:#f4ead8;font-family:Arial;padding:24px}table{width:100%;border-collapse:collapse}td,th{border-bottom:1px solid #333;padding:10px;text-align:left}img{background:#222}.ok{color:#f1c76a}</style></head><body><h1>RUTH IKAS Fotoğraf Durumu</h1>${busy}<p class="ok">Ürün: ${products.length} / Fotoğraflı: ${withImage}</p><p>Sipariş: ${(summary.orders || []).length}</p><table><thead><tr><th>Ürün</th><th>Foto</th><th>URL</th></tr></thead><tbody>${rows}</tbody></table></body></html>`);
       } catch (error) {
         return sendHtml(res, `<!doctype html><html><body><pre>${escapeHtmlServer(error && error.message ? error.message : "image_status_error")}</pre></body></html>`, 500);
       }
@@ -1217,10 +1209,21 @@ function buildCollectionsFromProducts(products, categories = []) {
 }
 
 async function buildIkasSummary() {
-  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 120000));
+  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 600000));
   if (cacheMs && ikasSummaryCache.value && ikasSummaryCache.expiresAt > Date.now()) {
     return ikasSummaryCache.value;
   }
+  if (ikasSummaryInFlight) {
+    return await ikasSummaryInFlight;
+  }
+  ikasSummaryInFlight = buildIkasSummaryFresh().finally(() => {
+    ikasSummaryInFlight = null;
+  });
+  return await ikasSummaryInFlight;
+}
+
+async function buildIkasSummaryFresh() {
+  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 600000));
   if (!ikasConfigured()) {
     return {
       connected: false,
@@ -1308,7 +1311,7 @@ async function buildIkasSummary() {
     collections,
     categories
   };
-  ikasSummaryCache = { expiresAt: Date.now() + Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 120000)), value: summary };
+  ikasSummaryCache = { expiresAt: Date.now() + Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 600000)), value: summary };
   return summary;
 }
 
@@ -1505,7 +1508,7 @@ async function enrichIkasImagesDirectFromProductPages(orders, products, categori
     });
   });
 
-  if (found) console.log(`Ikas direct storefront images matched: ${found}`);
+  if (found && String(process.env.IKAS_IMAGE_DEBUG_LOGS || "0") === "1") console.log(`Ikas direct storefront images matched: ${found}`);
 }
 
 function buildStorefrontProductUrlCandidates(item) {
@@ -2949,6 +2952,40 @@ function readJson(req, limit = 1_000_000) {
       if (!failed) reject(error);
     });
   });
+}
+
+
+async function getFastIkasImageStatusSummary() {
+  if (ikasSummaryCache.value) return ikasSummaryCache.value;
+
+  const timeoutMs = Math.max(1000, Math.min(6000, Number(process.env.IKAS_IMAGE_STATUS_TIMEOUT_MS || 2500)));
+  try {
+    return await Promise.race([
+      buildIkasSummary(),
+      new Promise((resolve) => setTimeout(() => resolve({ __busy: true, products: [], orders: [], updatedAt: "" }), timeoutMs))
+    ]);
+  } catch (error) {
+    return { __busy: true, products: [], orders: [], updatedAt: "", error: error && error.message ? error.message : "image_status_error" };
+  }
+}
+
+function makeImageStatusPayload(summary) {
+  const products = summary.products || [];
+  const orders = summary.orders || [];
+  return {
+    ok: true,
+    public: true,
+    busy: Boolean(summary.__busy),
+    products: products.length,
+    productsWithImage: products.filter((p) => p.image).length,
+    orders: orders.length,
+    orderItemsWithImage: orders.reduce((sum, o) => sum + (o.items || []).filter((i) => i.image).length, 0),
+    sampleProducts: products.slice(0, 15).map((p) => ({ name: p.name, image: p.image || "" })),
+    updatedAt: summary.updatedAt || "",
+    note: summary.__busy
+      ? "Fotoğraf taraması devam ediyor. 20-30 saniye sonra yenile."
+      : "productsWithImage 0'dan büyükse fotoğraflar bulunuyor demektir."
+  };
 }
 
 function escapeHtmlServer(value) {
