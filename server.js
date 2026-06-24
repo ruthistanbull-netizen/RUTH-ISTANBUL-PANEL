@@ -495,6 +495,49 @@ async function ikasGraphQL(query, variables = {}, label = "ikas") {
   return data.data || {};
 }
 
+
+async function fetchIkasPaginatedList({ label, rootField, fields, normalize, maxPages = 80 }) {
+  const limit = 200;
+  const all = [];
+  const seen = new Set();
+  const errors = [];
+
+  const pagedQuery = (page) => `query RuthPaged${rootField}${page} { ${rootField}(pagination: { limit: ${limit}, page: ${page} }) { data { ${fields} } } }`;
+  for (let page = 1; page <= maxPages; page += 1) {
+    try {
+      const data = await ikasGraphQL(pagedQuery(page), {}, `${label} page ${page}`);
+      const rows = data && data[rootField] && Array.isArray(data[rootField].data) ? data[rootField].data : [];
+      if (!rows.length) break;
+      let added = 0;
+      for (const row of rows) {
+        const key = String(row && (row.id || row.orderNumber || row.name) || JSON.stringify(row).slice(0, 80));
+        if (!seen.has(key)) {
+          seen.add(key);
+          all.push(row);
+          added += 1;
+        }
+      }
+      if (rows.length < limit || added === 0) break;
+    } catch (error) {
+      errors.push(error && error.message ? error.message : String(error));
+      break;
+    }
+  }
+
+  if (all.length) return normalize(all);
+
+  const noArgQuery = `query RuthNoArg${rootField} { ${rootField} { data { ${fields} } } }`;
+  try {
+    const data = await ikasGraphQL(noArgQuery, {}, `${label} no-args`);
+    const rows = data && data[rootField] && Array.isArray(data[rootField].data) ? data[rootField].data : [];
+    return normalize(rows || []);
+  } catch (error) {
+    errors.push(error && error.message ? error.message : String(error));
+  }
+
+  throw new Error(errors.join(" || ").slice(0, 1600));
+}
+
 async function fetchIkasOrders() {
   const fullFields = `
     id
@@ -533,29 +576,21 @@ async function fetchIkasOrders() {
     }
   `;
 
-  const queries = [
-    { label: "ikas orders no-args", query: `query RuthListOrders { listOrder { data { ${fullFields} } } }` },
-    { label: "ikas orders pagination-page1", query: `query RuthListOrders { listOrder(pagination: { page: 1, limit: 250 }) { data { ${fullFields} } } }` },
-    { label: "ikas orders minimal", query: `query RuthListOrdersMinimal { listOrder { data { id orderNumber orderSequence orderedAt createdAt updatedAt status orderPackageStatus orderPaymentStatus totalFinalPrice totalPrice currencySymbol currencyCode customer { id fullName firstName lastName email phone } orderLineItems { id quantity status variant { id name sku productId mainImageId variantValues { variantTypeName variantValueName } } } orderPackages { id orderPackageFulfillStatus orderPackageNumber } } } }` }
-  ];
-
-  const errors = [];
-  for (const attempt of queries) {
-    try {
-      const data = await ikasGraphQL(attempt.query, {}, attempt.label);
-      const rawOrders = data && data.listOrder && Array.isArray(data.listOrder.data) ? data.listOrder.data : [];
-      return normalizeIkasOrders(rawOrders);
-    } catch (error) {
-      errors.push(error && error.message ? error.message : String(error));
-    }
-  }
-  throw new Error(errors.join(" || ").slice(0, 1200));
+  const normalize = (rows) => normalizeIkasOrders(rows);
+  return fetchIkasPaginatedList({
+    label: "ikas orders",
+    rootField: "listOrder",
+    fields: fullFields,
+    normalize,
+    maxPages: 120
+  });
 }
 
 async function fetchIkasCategories() {
   if (!ikasConfigured()) return [];
   const queries = [
-    { label: "ikas categories full", query: `query RuthListCategories { listCategory { id name imageId parentId categoryPath } }` },
+    { label: "ikas categories full", query: `query RuthListCategories { listCategory { id name imageId parentId categoryPath categoryPathItems { id name } } }` },
+    { label: "ikas categories safe", query: `query RuthListCategoriesSafe { listCategory { id name parentId categoryPath } }` },
     { label: "ikas categories minimal", query: `query RuthListCategoriesMinimal { listCategory { id name } }` }
   ];
   const errors = [];
@@ -569,13 +604,14 @@ async function fetchIkasCategories() {
         parentId: valueOrEmpty(category.parentId),
         imageId: valueOrEmpty(category.imageId),
         image: buildIkasImageUrl(category.imageId),
-        categoryPath: Array.isArray(category.categoryPath) ? category.categoryPath : []
+        categoryPath: Array.isArray(category.categoryPath) ? category.categoryPath : [],
+        categoryPathItems: Array.isArray(category.categoryPathItems) ? category.categoryPathItems.map((item) => ({ id: valueOrEmpty(item.id), name: valueOrEmpty(item.name) })) : []
       })).filter((category) => category.id || category.name);
     } catch (error) {
       errors.push(error && error.message ? error.message : String(error));
     }
   }
-  console.error("ikas categories error:", errors.join(" || ").slice(0, 600));
+  console.error("ikas categories error:", errors.join(" || ").slice(0, 900));
   return [];
 }
 
@@ -583,7 +619,7 @@ async function fetchIkasProducts(categories = []) {
   if (!ikasConfigured()) return [];
   const categoryMap = new Map((categories || []).map((category) => [String(category.id), category]));
 
-  const fullFields = `
+  const safeFields = `
     id
     name
     createdAt
@@ -602,24 +638,14 @@ async function fetchIkasProducts(categories = []) {
     }
   `;
 
-  const queries = [
-    { label: "ikas products no-args", query: `query RuthListProducts { listProduct { data { ${fullFields} } } }` },
-    { label: "ikas products pagination-page1", query: `query RuthListProducts { listProduct(pagination: { page: 1, limit: 250 }) { data { ${fullFields} } } }` },
-    { label: "ikas products minimal", query: `query RuthListProductsMinimal { listProduct { data { id name createdAt updatedAt totalStock categoryIds categories { id name } variants { id name sku mainImageId productId } } } }` },
-    { label: "ikas products official-minimal", query: `query RuthListProductsOfficialMinimal { listProduct { data { id name createdAt } } }` }
-  ];
-
-  const errors = [];
-  for (const attempt of queries) {
-    try {
-      const data = await ikasGraphQL(attempt.query, {}, attempt.label);
-      const rawProducts = data && data.listProduct && Array.isArray(data.listProduct.data) ? data.listProduct.data : [];
-      return normalizeIkasProducts(rawProducts, categoryMap);
-    } catch (error) {
-      errors.push(error && error.message ? error.message : String(error));
-    }
-  }
-  throw new Error(errors.join(" || ").slice(0, 1200));
+  const normalize = (rows) => normalizeIkasProducts(rows, categoryMap);
+  return fetchIkasPaginatedList({
+    label: "ikas products",
+    rootField: "listProduct",
+    fields: safeFields,
+    normalize,
+    maxPages: 120
+  });
 }
 
 function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
@@ -1886,7 +1912,27 @@ function sanitizeImage(image) {
 
 function normalizeReminderAt(value) {
   if (!value) return "";
-  const date = new Date(value);
+  const raw = String(value).trim();
+
+  // <input type="datetime-local"> values arrive like "2026-06-24T14:30" with no timezone.
+  // Render runs in UTC, so new Date(raw) would incorrectly treat that time as UTC.
+  // The admin panel is used in Turkey, so timezone-less reminder inputs are interpreted
+  // as Europe/Istanbul time (UTC+03:00) and stored as UTC ISO.
+  const localMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (localMatch) {
+    const year = Number(localMatch[1]);
+    const month = Number(localMatch[2]);
+    const day = Number(localMatch[3]);
+    const hour = Number(localMatch[4]);
+    const minute = Number(localMatch[5]);
+    const second = Number(localMatch[6] || 0);
+    const utcMs = Date.UTC(year, month - 1, day, hour - 3, minute, second);
+    const date = new Date(utcMs);
+    if (Number.isNaN(date.getTime())) return "";
+    return date.toISOString();
+  }
+
+  const date = new Date(raw);
   if (Number.isNaN(date.getTime())) return "";
   return date.toISOString();
 }
