@@ -2333,6 +2333,59 @@ function adminHtml() {
     </form>
   </section>
 
+  <script>
+    (function(){
+      function bindRuthLogin(){
+        var form = document.getElementById('loginForm');
+        if(!form || form.dataset.ruthDirectLogin === '1') return;
+        form.dataset.ruthDirectLogin = '1';
+        form.addEventListener('submit', function(e){
+          e.preventDefault();
+          e.stopImmediatePropagation();
+
+          var userEl = document.getElementById('loginUser');
+          var passEl = document.getElementById('loginPass');
+          var errEl = document.getElementById('loginError');
+          var btn = form.querySelector('button[type="submit"]');
+
+          if(errEl) errEl.textContent = '';
+          if(btn) btn.disabled = true;
+
+          fetch('/api/admin/login', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              username: (userEl && userEl.value || '').trim(),
+              password: passEl && passEl.value || ''
+            })
+          })
+          .then(function(r){
+            return r.text().then(function(t){
+              var data = {};
+              try { data = t ? JSON.parse(t) : {}; } catch(err) {}
+              if(!r.ok) throw new Error(data.error || data.message || 'Giriş başarısız');
+              return data;
+            });
+          })
+          .then(function(data){
+            if(!data.token) throw new Error('token alınamadı');
+            localStorage.setItem('ruth_admin_token', data.token);
+            window.location.href = '/admin/';
+          })
+          .catch(function(err){
+            if(errEl) errEl.textContent = 'Giriş başarısız: ' + (err && err.message ? err.message : err);
+            if(btn) btn.disabled = false;
+          });
+        }, true);
+      }
+      if(document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', bindRuthLogin);
+      } else {
+        bindRuthLogin();
+      }
+    })();
+  </script>
+
   <section id="app" class="app hidden">
     <div id="drawerShade" class="drawer-shade"></div>
     <aside class="sidebar">
