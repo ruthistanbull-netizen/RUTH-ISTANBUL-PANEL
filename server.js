@@ -22,6 +22,12 @@ const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || "";
 const VAPID_SUBJECT = process.env.VAPID_SUBJECT || "mailto:info@ruthistanbul.com";
 const SUPABASE_URL = normalizeSupabaseUrl(process.env.SUPABASE_URL || "");
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const IKAS_STORE_NAME = String(process.env.IKAS_STORE_NAME || "").trim().replace(/^https?:\/\//i, "").replace(/\/.*$/g, "").replace(/\.myikas\.com$/i, "");
+const IKAS_CLIENT_ID = String(process.env.IKAS_CLIENT_ID || "").trim();
+const IKAS_CLIENT_SECRET = String(process.env.IKAS_CLIENT_SECRET || "").trim();
+const IKAS_GRAPHQL_URL = String(process.env.IKAS_GRAPHQL_URL || "https://api.myikas.com/api/v1/admin/graphql").trim();
+const IKAS_TOKEN_URL = IKAS_STORE_NAME ? `https://${IKAS_STORE_NAME}.myikas.com/api/admin/oauth/token` : "";
+let ikasTokenCache = { token: "", expiresAt: 0 };
 const MAX_IMAGE_BYTES = Number(process.env.RUTH_MAX_IMAGE_BYTES || 2_500_000);
 const ADMIN_NOTIFICATION_TITLE = "RUTH ISTANBUL";
 
@@ -391,17 +397,414 @@ async function handleAdminApi(req, res, url) {
   }
 
   if (req.method === "GET" && pathname === "/api/admin/ikas/summary") {
-    return sendJson(res, {
-      ok: true,
-      connected: false,
-      totals: { orders: 0, units: 0, revenue: 0 },
-      productTotals: [],
-      orders: [],
-      message: "ikas API bağlanınca siparişler ve ürün toplamları burada görünecek."
-    });
+    try {
+      const summary = await buildIkasSummary();
+      return sendJson(res, { ok: true, ...summary });
+    } catch (error) {
+      console.error("ikas summary error:", error && error.message ? error.message : error);
+      return sendJson(res, {
+        ok: true,
+        connected: false,
+        ikasError: error && error.message ? error.message : "ikas_error",
+        totals: { orders: 0, units: 0, readyOrders: 0, readyUnits: 0, deliveredOrders: 0, revenue: 0 },
+        productTotals: [],
+        orders: [],
+        deliveredOrders: [],
+        message: "ikas bağlantısı kurulamadı. Render Environment Variables içindeki IKAS_STORE_NAME / IKAS_CLIENT_ID / IKAS_CLIENT_SECRET değerlerini kontrol et."
+      });
+    }
   }
 
   sendJson(res, { ok: false, error: "not_found" }, 404);
+}
+
+function ikasConfigured() {
+  return Boolean(IKAS_STORE_NAME && IKAS_CLIENT_ID && IKAS_CLIENT_SECRET && IKAS_GRAPHQL_URL && IKAS_TOKEN_URL);
+}
+
+async function getIkasAccessToken() {
+  if (!ikasConfigured()) {
+    throw new Error("IKAS env eksik: IKAS_STORE_NAME, IKAS_CLIENT_ID ve IKAS_CLIENT_SECRET eklenmeli");
+  }
+
+  const now = Date.now();
+  if (ikasTokenCache.token && ikasTokenCache.expiresAt > now + 60_000) {
+    return ikasTokenCache.token;
+  }
+
+  const body = new URLSearchParams();
+  body.set("grant_type", "client_credentials");
+  body.set("client_id", IKAS_CLIENT_ID);
+  body.set("client_secret", IKAS_CLIENT_SECRET);
+
+  const response = await fetch(IKAS_TOKEN_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body
+  });
+
+  const text = await response.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch (error) {}
+
+  if (!response.ok || !data.access_token) {
+    throw new Error(`ikas token alınamadı (${response.status}): ${String(text || "").slice(0, 180)}`);
+  }
+
+  ikasTokenCache = {
+    token: data.access_token,
+    expiresAt: now + Math.max(60, Number(data.expires_in || 3600) - 120) * 1000
+  };
+  return ikasTokenCache.token;
+}
+
+async function ikasGraphQL(query, variables = {}) {
+  const token = await getIkasAccessToken();
+  const response = await fetch(IKAS_GRAPHQL_URL, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`
+    },
+    body: JSON.stringify({ query, variables })
+  });
+
+  const text = await response.text();
+  let data = {};
+  try { data = text ? JSON.parse(text) : {}; } catch (error) {}
+
+  if (!response.ok) {
+    throw new Error(`ikas graphql HTTP ${response.status}: ${String(text || "").slice(0, 220)}`);
+  }
+  if (data.errors && data.errors.length) {
+    throw new Error(`ikas graphql: ${data.errors.map((item) => item.message || JSON.stringify(item)).join(" | ").slice(0, 240)}`);
+  }
+  return data.data || {};
+}
+
+async function fetchIkasOrders() {
+  const query = `
+    query RuthListOrders {
+      listOrder(sort: "orderedAt:desc") {
+        data {
+          id
+          orderNumber
+          orderedAt
+          createdAt
+          updatedAt
+          status
+          orderPackageStatus
+          orderPaymentStatus
+          totalFinalPrice
+          totalPrice
+          currencySymbol
+          currencyCode
+          customer {
+            id
+            fullName
+            firstName
+            lastName
+            email
+            phone
+          }
+          shippingAddress {
+            firstName
+            lastName
+            phone
+            city { name }
+            district { name }
+          }
+          orderPackages {
+            id
+            orderPackageNumber
+            orderPackageFulfillStatus
+            trackingInfo {
+              cargoCompany
+              trackingNumber
+              trackingLink
+            }
+          }
+          orderLineItems {
+            id
+            quantity
+            status
+            finalPrice
+            price
+            options {
+              name
+              values { name value }
+            }
+            variant {
+              id
+              name
+              sku
+              slug
+              productId
+              mainImageId
+              variantValues {
+                variantTypeName
+                variantValueName
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  const data = await ikasGraphQL(query);
+  const rawOrders = data && data.listOrder && Array.isArray(data.listOrder.data) ? data.listOrder.data : [];
+  return normalizeIkasOrders(rawOrders);
+}
+
+async function buildIkasSummary() {
+  if (!ikasConfigured()) {
+    return {
+      connected: false,
+      totals: { orders: 0, units: 0, readyOrders: 0, readyUnits: 0, deliveredOrders: 0, revenue: 0 },
+      productTotals: [],
+      orders: [],
+      deliveredOrders: [],
+      message: "ikas env değerleri bekleniyor."
+    };
+  }
+
+  const orders = await fetchIkasOrders();
+  const readyOrders = orders.filter(isReadyOrder);
+  const deliveredOrders = orders.filter(isDeliveredOrder);
+  const productTotals = buildReadyProductTotals(readyOrders);
+  const units = orders.reduce((sum, order) => sum + order.items.reduce((s, item) => s + Number(item.quantity || 0), 0), 0);
+  const readyUnits = readyOrders.reduce((sum, order) => sum + order.items.reduce((s, item) => s + Number(item.quantity || 0), 0), 0);
+  const revenue = orders.reduce((sum, order) => sum + Number(order.total || 0), 0);
+
+  return {
+    connected: true,
+    updatedAt: new Date().toISOString(),
+    totals: {
+      orders: orders.length,
+      units,
+      readyOrders: readyOrders.length,
+      readyUnits,
+      deliveredOrders: deliveredOrders.length,
+      revenue
+    },
+    productTotals,
+    orders,
+    deliveredOrders
+  };
+}
+
+function normalizeIkasOrders(rawOrders) {
+  return rawOrders.map((order) => {
+    const customerName =
+      valueOrEmpty(order.customer && order.customer.fullName) ||
+      [order.customer && order.customer.firstName, order.customer && order.customer.lastName].filter(Boolean).join(" ").trim() ||
+      [order.shippingAddress && order.shippingAddress.firstName, order.shippingAddress && order.shippingAddress.lastName].filter(Boolean).join(" ").trim() ||
+      "Müşteri";
+
+    const packageStatuses = Array.isArray(order.orderPackages)
+      ? order.orderPackages.map((pkg) => String(pkg.orderPackageFulfillStatus || "").trim()).filter(Boolean)
+      : [];
+
+    const items = Array.isArray(order.orderLineItems) ? order.orderLineItems.map((item) => normalizeIkasLineItem(item, order)) : [];
+
+    return {
+      id: valueOrEmpty(order.id),
+      number: order.orderNumber ? `#${order.orderNumber}` : valueOrEmpty(order.id).slice(0, 8),
+      orderNumber: valueOrEmpty(order.orderNumber),
+      customer: customerName,
+      phone: valueOrEmpty(order.customer && order.customer.phone) || valueOrEmpty(order.shippingAddress && order.shippingAddress.phone),
+      email: valueOrEmpty(order.customer && order.customer.email),
+      city: valueOrEmpty(order.shippingAddress && order.shippingAddress.city && order.shippingAddress.city.name),
+      district: valueOrEmpty(order.shippingAddress && order.shippingAddress.district && order.shippingAddress.district.name),
+      statusRaw: valueOrEmpty(order.status),
+      packageStatusRaw: valueOrEmpty(order.orderPackageStatus) || packageStatuses[0] || "",
+      paymentStatusRaw: valueOrEmpty(order.orderPaymentStatus),
+      status: translateOrderStatus(order.status, order.orderPackageStatus, order.orderPaymentStatus),
+      packageStatus: translatePackageStatus(order.orderPackageStatus || packageStatuses[0] || ""),
+      paymentStatus: translatePaymentStatus(order.orderPaymentStatus),
+      orderedAt: normalizeIkasDate(order.orderedAt || order.createdAt || order.updatedAt),
+      total: Number(order.totalFinalPrice ?? order.totalPrice ?? 0),
+      currency: valueOrEmpty(order.currencySymbol) || valueOrEmpty(order.currencyCode) || "₺",
+      items
+    };
+  }).sort((a, b) => String(b.orderedAt || "").localeCompare(String(a.orderedAt || "")));
+}
+
+function normalizeIkasLineItem(item, order) {
+  const variant = item && item.variant ? item.variant : {};
+  const variantText = buildVariantText(item, variant);
+  const name = valueOrEmpty(variant.name) || "Ürün";
+  const mainImageId = valueOrEmpty(variant.mainImageId);
+  return {
+    id: valueOrEmpty(item.id) || valueOrEmpty(variant.id),
+    variantId: valueOrEmpty(variant.id),
+    productId: valueOrEmpty(variant.productId),
+    name: variantText ? `${name} — ${variantText}` : name,
+    baseName: name,
+    variantText,
+    sku: valueOrEmpty(variant.sku),
+    slug: valueOrEmpty(variant.slug),
+    image: buildIkasImageUrl(mainImageId),
+    mainImageId,
+    quantity: Number(item.quantity || 0),
+    statusRaw: valueOrEmpty(item.status),
+    status: translateLineStatus(item.status),
+    orderNumber: order && order.orderNumber ? `#${order.orderNumber}` : "",
+    orderId: valueOrEmpty(order && order.id)
+  };
+}
+
+function buildVariantText(item, variant) {
+  const parts = [];
+
+  if (variant && Array.isArray(variant.variantValues)) {
+    variant.variantValues.forEach((value) => {
+      const left = valueOrEmpty(value.variantTypeName);
+      const right = valueOrEmpty(value.variantValueName);
+      if (right) parts.push(left ? `${left}: ${right}` : right);
+    });
+  }
+
+  if (item && Array.isArray(item.options)) {
+    item.options.forEach((option) => {
+      const name = valueOrEmpty(option.name);
+      const values = Array.isArray(option.values)
+        ? option.values.map((v) => valueOrEmpty(v.name) || valueOrEmpty(v.value)).filter(Boolean)
+        : [];
+      if (values.length) parts.push(name ? `${name}: ${values.join(", ")}` : values.join(", "));
+    });
+  }
+
+  return [...new Set(parts)].join(" / ");
+}
+
+function buildIkasImageUrl(mainImageId) {
+  const id = valueOrEmpty(mainImageId);
+  if (!id) return "";
+  const base = String(process.env.IKAS_IMAGE_BASE_URL || "").trim().replace(/\/+$/, "");
+  if (base) return `${base}/${encodeURIComponent(id)}`;
+  return "";
+}
+
+function buildReadyProductTotals(readyOrders) {
+  const map = new Map();
+
+  readyOrders.forEach((order) => {
+    order.items.forEach((item) => {
+      const key = item.variantId || item.sku || item.name;
+      const existing = map.get(key) || {
+        key,
+        name: item.name,
+        baseName: item.baseName,
+        variantText: item.variantText,
+        sku: item.sku,
+        image: item.image,
+        mainImageId: item.mainImageId,
+        quantity: 0,
+        orders: []
+      };
+      existing.quantity += Number(item.quantity || 0);
+      existing.orders.push({ orderNumber: order.number, quantity: Number(item.quantity || 0), customer: order.customer });
+      if (!existing.image && item.image) existing.image = item.image;
+      map.set(key, existing);
+    });
+  });
+
+  return [...map.values()].sort((a, b) => Number(b.quantity || 0) - Number(a.quantity || 0));
+}
+
+function isReadyOrder(order) {
+  const values = [
+    order && order.packageStatusRaw,
+    order && order.statusRaw,
+    ...(order && order.items ? order.items.map((item) => item.statusRaw) : [])
+  ].map((value) => String(value || "").toUpperCase());
+
+  return values.some((value) =>
+    value.includes("READY_FOR_SHIPMENT") ||
+    value.includes("READY_TO_SHIP") ||
+    value.includes("READY")
+  );
+}
+
+function isDeliveredOrder(order) {
+  const values = [
+    order && order.packageStatusRaw,
+    order && order.statusRaw,
+    ...(order && order.items ? order.items.map((item) => item.statusRaw) : [])
+  ].map((value) => String(value || "").toUpperCase());
+
+  return values.some((value) =>
+    value.includes("DELIVERED") ||
+    value.includes("FULFILLED") ||
+    value.includes("COMPLETED")
+  );
+}
+
+function translateOrderStatus(status, packageStatus, paymentStatus) {
+  const packageText = translatePackageStatus(packageStatus);
+  const raw = String(status || "").toUpperCase();
+  if (packageText && packageText !== "Durum Yok") return packageText;
+  if (!raw) return translatePaymentStatus(paymentStatus) || "Yeni";
+  if (raw.includes("CANCEL")) return "İptal Edildi";
+  if (raw.includes("REFUND")) return "İade Edildi";
+  if (raw.includes("FULFILLED") || raw.includes("DELIVERED") || raw.includes("COMPLETED")) return "Teslim Edildi";
+  if (raw.includes("READY")) return "Kargoya Hazır";
+  if (raw.includes("OPEN") || raw.includes("CREATED")) return "Yeni";
+  return humanizeEnum(raw);
+}
+
+function translatePackageStatus(status) {
+  const raw = String(status || "").toUpperCase();
+  if (!raw) return "Durum Yok";
+  if (raw.includes("READY_FOR_SHIPMENT") || raw.includes("READY_TO_SHIP") || raw.includes("READY")) return "Kargoya Hazır";
+  if (raw.includes("FULFILLED") || raw.includes("DELIVERED") || raw.includes("COMPLETED")) return "Teslim Edildi";
+  if (raw.includes("CANCEL")) return "İptal Edildi";
+  if (raw.includes("REFUND")) return "İade Edildi";
+  if (raw.includes("UNFULFILLED")) return "Hazırlanıyor";
+  return humanizeEnum(raw);
+}
+
+function translatePaymentStatus(status) {
+  const raw = String(status || "").toUpperCase();
+  if (!raw) return "";
+  if (raw.includes("PAID")) return "Ödendi";
+  if (raw.includes("PENDING")) return "Ödeme Bekliyor";
+  if (raw.includes("REFUND")) return "İade Edildi";
+  if (raw.includes("CANCEL")) return "İptal Edildi";
+  return humanizeEnum(raw);
+}
+
+function translateLineStatus(status) {
+  const raw = String(status || "").toUpperCase();
+  if (!raw) return "";
+  if (raw.includes("READY")) return "Kargoya Hazır";
+  if (raw.includes("FULFILLED") || raw.includes("DELIVERED") || raw.includes("COMPLETED")) return "Teslim Edildi";
+  if (raw.includes("CANCEL")) return "İptal Edildi";
+  if (raw.includes("REFUND")) return "İade Edildi";
+  return humanizeEnum(raw);
+}
+
+function humanizeEnum(value) {
+  return String(value || "")
+    .toLowerCase()
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toLocaleUpperCase("tr") + part.slice(1))
+    .join(" ");
+}
+
+function valueOrEmpty(value) {
+  return value === null || value === undefined ? "" : String(value).trim();
+}
+
+function normalizeIkasDate(value) {
+  if (!value) return "";
+  const raw = Number(value);
+  const date = Number.isFinite(raw) ? new Date(raw) : new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toISOString();
 }
 
 function setAdminTyping(conversationId, typing) {
@@ -894,7 +1297,7 @@ function adminHtml() {
         <div id="page-orders" class="page">
           <div class="page-head"><div><div class="page-title">Siparişler</div><div class="page-sub">ikas API ile gelen sipariş ürün toplamları burada görünecek.</div></div><button id="syncOrders" class="btn gold">Siparişleri Senkronize Et</button></div>
           <div class="metrics"><div class="metric"><div class="metric-label">Toplam Sipariş</div><div id="ordersTotal" class="metric-num">0</div></div><div class="metric"><div class="metric-label">Toplam Ürün Adedi</div><div id="unitsTotal" class="metric-num">0</div></div><div class="metric"><div class="metric-label">Ürün Çeşidi</div><div id="productKinds" class="metric-num">0</div></div><div class="metric"><div class="metric-label">ikas Durumu</div><div id="ikasStatus" class="metric-num" style="font-size:22px">Bekliyor</div></div></div>
-          <div class="orders-grid"><div class="panel"><div class="panel-head"><div class="panel-title">Hazırlanacak Ürün Toplamları</div></div><div id="productTotals" class="panel-body"><div class="empty">ikas API bağlanınca ürün isimleri, fotoğrafları ve adetleri burada görünecek.</div></div></div><div class="panel"><div class="panel-head"><div class="panel-title">Gelen Siparişler</div></div><div id="ordersList" class="panel-body"><div class="empty">Henüz canlı sipariş verisi bağlı değil.</div></div></div></div>
+          <div class="orders-grid"><div class="panel"><div class="panel-head"><div class="panel-title">Hazırlanacak Ürün Toplamları</div><span class="badge" id="readyOrdersBadge">0</span></div><div id="productTotals" class="panel-body"><div class="empty">Kargoya hazır siparişlerdeki ürün toplamları burada görünecek.</div></div></div><div class="panel"><div class="panel-head"><div class="panel-title">Tüm Siparişler</div><span class="badge" id="allOrdersBadge">0</span></div><div id="ordersList" class="panel-body"><div class="empty">Henüz canlı sipariş verisi bağlı değil.</div></div></div><div class="panel" style="grid-column:1/-1"><div class="panel-head"><div class="panel-title">Teslim Edilen Siparişler</div><span class="badge" id="deliveredOrdersBadge">0</span></div><div id="deliveredOrdersList" class="panel-body"><div class="empty">Teslim edilen sipariş bulunamadı.</div></div></div></div>
         </div>
 
         <div id="page-integration" class="page"><div class="page-head"><div><div class="page-title">ikas Entegrasyonu</div><div class="page-sub">Bir sonraki adımda ikas API bilgilerini buraya bağlayacağız.</div></div></div><div class="card"><div class="card-title">Bağlantı Planı</div><p class="page-sub">Siparişler, ürün görselleri, ürün adları ve toplam hazırlanacak adetler bu menüye aktarılacak.</p></div></div>
@@ -910,7 +1313,7 @@ function adminHtml() {
 <script>
 (function(){
   var token=localStorage.getItem('ruth_admin_token')||'';
-  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0},productTotals:[],orders:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null;
+  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0},productTotals:[],orders:[],deliveredOrders:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null;
   function $(id){return document.getElementById(id)}
   function qsa(sel){return Array.prototype.slice.call(document.querySelectorAll(sel))}
   function setText(id,val){var el=$(id); if(el) el.textContent=(val===undefined||val===null)?'':String(val)}
@@ -953,8 +1356,66 @@ function adminHtml() {
   function loadCrmDetail(id,silent){var c=getActive(); setText('crmTitle',c.displayName||'Ziyaretçi'); setText('crmSub',c.pageTitle||c.pageUrl||'Müşteri kaydı'); setText('crmPhone',c.visitorPhone||'-'); setText('crmStatus',c.status||'open'); setText('crmLast',c.lastMessageText||'-'); $('noteText').disabled=false; $('noteReminder').disabled=false; $('noteBtn').disabled=false; if(!silent)$('notesList').innerHTML='<div class="empty">Notlar yükleniyor...</div>'; return api('/api/admin/conversations/'+encodeURIComponent(id)+'/messages').then(function(d){renderNotes(d.notes||[])}).catch(function(err){$('notesList').innerHTML='<div class="empty">CRM yüklenemedi: '+escapeHtml(err.message)+'</div>'})}
   function renderNotes(notes){var el=$('notesList'); if(!notes.length){el.innerHTML='<div class="empty">Bu müşteri için henüz özel not yok.</div>';return;} el.innerHTML=notes.map(function(n){return '<div class="note '+(n.completedAt?'done':'')+'"><div class="row"><div class="note-body">'+escapeHtml(n.body)+'</div><button class="btn ghost note-done" data-id="'+escapeHtml(n.id)+'" data-done="'+(n.completedAt?'1':'0')+'">'+(n.completedAt?'Geri Al':'Tamamla')+'</button></div><div class="note-meta">Hatırlatma: '+escapeHtml(n.reminderAt?fmtDate(n.reminderAt):'Yok')+' • Oluşturuldu: '+fmtDate(n.createdAt)+'</div></div>'}).join(''); qsa('.note-done').forEach(function(b){b.addEventListener('click',function(){api('/api/admin/notes/'+encodeURIComponent(b.getAttribute('data-id')),{method:'PATCH',body:JSON.stringify({completed:b.getAttribute('data-done')!=='1'})}).then(function(){loadCrmDetail(activeId);loadReminders()})})})}
   $('noteForm').addEventListener('submit',function(e){e.preventDefault(); if(!activeId)return; var text=$('noteText').value.trim(); if(!text)return; $('noteBtn').disabled=true; api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/notes',{method:'POST',body:JSON.stringify({note:text,reminderAt:$('noteReminder').value||''})}).then(function(){$('noteText').value='';$('noteReminder').value='';loadCrmDetail(activeId);loadReminders();toast('Müşteri notu eklendi')}).catch(function(err){alert('Not eklenemedi: '+err.message)}).finally(function(){$('noteBtn').disabled=false})});
-  function renderIkas(){var totals=ikasSummary.totals||{}; var products=ikasSummary.productTotals||[]; var orders=ikasSummary.orders||[]; setText('statOrders',totals.orders||0); setText('badgeOrders',totals.orders||0); setText('ordersToday',totals.orders||0); setText('unitsToday',totals.units||0); setText('kindsToday',products.length||0); setText('ordersTotal',totals.orders||0); setText('unitsTotal',totals.units||0); setText('productKinds',products.length||0); setText('ikasStatus',ikasSummary.connected?'Bağlı':'Bekliyor'); var top=$('topProducts'); if(top){ if(products.length){top.innerHTML=products.slice(0,5).map(function(p,i){return '<div class="rail-product"><div class="prod-img">'+(p.image?'<img src="'+escapeHtml(p.image)+'" alt="">':'◇')+'</div><div><div class="name">'+(i+1)+'. '+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+Number(p.quantity||0)+' adet</div></div></div>'}).join('')}else top.innerHTML='<div class="empty">ikas API bağlanınca ürünler burada görünecek.</div>'} var el=$('productTotals'); if(el){ if(products.length){el.innerHTML=products.map(function(p){return '<div class="product-row"><div class="prod-img">'+(p.image?'<img src="'+escapeHtml(p.image)+'" alt="">':'◇')+'</div><div><div class="name">'+escapeHtml(p.name||'Ürün')+'</div><div class="preview">SKU: '+escapeHtml(p.sku||'-')+'</div></div><div class="qty">'+Number(p.quantity||0)+'</div></div>'}).join('')}else el.innerHTML='<div class="empty">ikas API bağlanınca ürün isimleri, fotoğrafları ve toplam adetler burada görünecek.</div>'} var list=$('ordersList'); if(list){ if(orders.length){list.innerHTML=orders.map(function(o){return '<div class="order-row"><div class="prod-img">▣</div><div><div class="name">'+escapeHtml(o.number||'Sipariş')+'</div><div class="preview">'+escapeHtml(o.customer||'')+'</div></div><div class="badge">'+escapeHtml(o.status||'Yeni')+'</div></div>'}).join('')}else list.innerHTML='<div class="empty">Henüz canlı sipariş verisi bağlı değil.</div>'}}
-  $('syncOrders').addEventListener('click',function(){loadIkasSummary().then(function(){toast('Sipariş verisi yenilendi')})}); $('quickSync').addEventListener('click',function(){setRoute('orders',true);loadIkasSummary().then(function(){toast('Sipariş verisi yenilendi')})});
+  function renderIkas(){
+    var totals=ikasSummary.totals||{};
+    var products=ikasSummary.productTotals||[];
+    var orders=ikasSummary.orders||[];
+    var delivered=ikasSummary.deliveredOrders||[];
+    setText('statOrders',totals.orders||0);
+    setText('badgeOrders',totals.orders||0);
+    setText('ordersToday',totals.orders||0);
+    setText('unitsToday',totals.units||0);
+    setText('kindsToday',products.length||0);
+    setText('ordersTotal',totals.orders||0);
+    setText('unitsTotal',totals.readyUnits||totals.units||0);
+    setText('productKinds',products.length||0);
+    setText('ikasStatus',ikasSummary.connected?'Bağlı':'Bekliyor');
+    setText('readyOrdersBadge',totals.readyOrders||0);
+    setText('allOrdersBadge',totals.orders||0);
+    setText('deliveredOrdersBadge',totals.deliveredOrders||delivered.length||0);
+
+    var top=$('topProducts');
+    if(top){
+      if(products.length){
+        top.innerHTML=products.slice(0,5).map(function(p,i){
+          return '<div class="rail-product"><div class="prod-img">'+(p.image?'<img src="'+escapeHtml(p.image)+'" alt="">':'◇')+'</div><div><div class="name">'+(i+1)+'. '+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+Number(p.quantity||0)+' adet • Kargoya hazır</div></div></div>'
+        }).join('')
+      } else top.innerHTML='<div class="empty">Kargoya hazır ürün bulunamadı.</div>'
+    }
+
+    var el=$('productTotals');
+    if(el){
+      if(products.length){
+        el.innerHTML=products.map(function(p){
+          var orderText=(p.orders||[]).slice(0,4).map(function(o){return escapeHtml(o.orderNumber)+' × '+Number(o.quantity||0)}).join(' • ');
+          return '<div class="product-row"><div class="prod-img">'+(p.image?'<img src="'+escapeHtml(p.image)+'" alt="">':'◇')+'</div><div><div class="name">'+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+(p.sku?'SKU: '+escapeHtml(p.sku)+' • ':'')+orderText+'</div></div><div class="qty">'+Number(p.quantity||0)+'</div></div>'
+        }).join('')
+      } else el.innerHTML='<div class="empty">Kargoya hazır olarak işaretlenmiş siparişlerde ürün yok.</div>'
+    }
+
+    var list=$('ordersList');
+    if(list){
+      if(orders.length){
+        list.innerHTML=orders.map(function(o){
+          var items=(o.items||[]).slice(0,3).map(function(i){return escapeHtml(i.name)+' × '+Number(i.quantity||0)}).join('<br>');
+          var amount=(o.currency||'₺')+' '+Number(o.total||0).toLocaleString('tr-TR');
+          return '<div class="order-row"><div class="prod-img">▣</div><div><div class="name">'+escapeHtml(o.number||'Sipariş')+' — '+escapeHtml(o.customer||'')+'</div><div class="preview">'+escapeHtml(o.status||'Durum yok')+' • '+escapeHtml(o.paymentStatus||'')+' • '+amount+'</div><div class="preview" style="white-space:normal">'+items+'</div></div><div class="badge">'+escapeHtml(o.packageStatus||o.status||'Yeni')+'</div></div>'
+        }).join('')
+      } else list.innerHTML=ikasSummary.ikasError?'<div class="empty">'+escapeHtml(ikasSummary.ikasError)+'</div>':'<div class="empty">Henüz canlı sipariş verisi bağlı değil.</div>'
+    }
+
+    var deliveredList=$('deliveredOrdersList');
+    if(deliveredList){
+      if(delivered.length){
+        deliveredList.innerHTML=delivered.map(function(o){
+          var items=(o.items||[]).slice(0,5).map(function(i){return escapeHtml(i.name)+' × '+Number(i.quantity||0)}).join('<br>');
+          return '<div class="order-row"><div class="prod-img">✓</div><div><div class="name">'+escapeHtml(o.number||'Sipariş')+' — '+escapeHtml(o.customer||'')+'</div><div class="preview">'+escapeHtml(o.packageStatus||'Teslim Edildi')+' • '+formatDate(o.orderedAt)+'</div><div class="preview" style="white-space:normal">'+items+'</div></div><div class="badge">Teslim</div></div>'
+        }).join('')
+      } else deliveredList.innerHTML='<div class="empty">Teslim edilen sipariş bulunamadı.</div>'
+    }
+  }
+  function formatDate(value){if(!value)return ''; try{return new Date(value).toLocaleString('tr-TR',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'})}catch(e){return ''}}
+    $('syncOrders').addEventListener('click',function(){loadIkasSummary().then(function(){toast('Sipariş verisi yenilendi')})}); $('quickSync').addEventListener('click',function(){setRoute('orders',true);loadIkasSummary().then(function(){toast('Sipariş verisi yenilendi')})});
   $('refreshSupport').addEventListener('click',function(){loadConversations(false)}); $('refreshCrm').addEventListener('click',function(){loadConversations(false)}); $('searchInput').addEventListener('input',renderConversations); $('crmSearch').addEventListener('input',renderCustomers);
   $('pushBtn').addEventListener('click',subscribePush);
   function subscribePush(){ if(!('serviceWorker' in navigator)||!('PushManager' in window)){alert('Bu tarayıcı bildirim desteklemiyor.');return;} api('/api/admin/me').then(function(me){if(!me.vapidPublicKey)throw new Error('VAPID key yok'); return navigator.serviceWorker.register('/sw.js').then(function(reg){return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)})})}).then(function(sub){return api('/api/admin/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub})})}).then(function(){toast('Bildirimler açıldı')}).catch(function(err){alert('Bildirim açılamadı: '+err.message)})}
