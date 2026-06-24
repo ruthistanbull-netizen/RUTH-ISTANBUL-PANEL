@@ -731,7 +731,6 @@ async function fetchIkasOrders() {
           variant {
             id
             sku
-            barcodeList
             variantValues { variantTypeName variantValueName }
           }
         }
@@ -755,7 +754,6 @@ async function fetchIkasOrders() {
         currencyCode
         customer { id fullName firstName lastName email phone isGuestCheckout }
         shippingAddress { firstName lastName phone }
-        orderPackages { id orderPackageFulfillStatus }
         orderLineItems {
           id
           quantity
@@ -772,7 +770,7 @@ async function fetchIkasOrders() {
       `
     },
     {
-      label: "ikas orders minimal",
+      label: "ikas orders minimal-items",
       fields: `
         id
         orderNumber
@@ -794,13 +792,12 @@ async function fetchIkasOrders() {
           status
           finalPrice
           price
-          options { name values { name value } }
           variant { id sku }
         }
       `
     },
     {
-      label: "ikas orders bare",
+      label: "ikas orders guaranteed-date",
       fields: `
         id
         orderNumber
@@ -815,8 +812,14 @@ async function fetchIkasOrders() {
         totalPrice
         currencySymbol
         currencyCode
-        customer { id fullName firstName lastName email phone }
-        orderLineItems { id quantity status finalPrice price }
+      `
+    },
+    {
+      label: "ikas orders guaranteed-minimal",
+      fields: `
+        id
+        orderNumber
+        orderedAt
       `
     }
   ];
@@ -834,6 +837,7 @@ async function fetchIkasOrders() {
       if (Array.isArray(orders)) return orders;
     } catch (error) {
       errors.push(`${attempt.label}: ${error && error.message ? error.message : String(error)}`);
+      console.error("ikas order attempt failed:", `${attempt.label}: ${error && error.message ? error.message : String(error)}`.slice(0, 900));
     }
   }
   throw new Error(errors.join(" || ").slice(0, 1800));
@@ -874,69 +878,23 @@ async function fetchIkasProducts(categories = []) {
   const categoryMap = new Map((categories || []).map((category) => [String(category.id), category]));
   const normalize = (rows) => normalizeIkasProducts(rows, categoryMap);
 
-  // Product.variants is Variant[], but many ikas stores expose fewer fields on Variant.
-  // Never ask name/mainImageId/productId from Product Variant; those caused GRAPHQL_VALIDATION_FAILED.
+  // Bu sürüm özellikle stabil çalışsın diye debug çıktısında doğrulanmış alanları kullanır.
+  // Senin ikas şemanda Product için id/name/categoryIds kesin çalışıyor.
+  // Variant alanları mağazaya göre farklı çıktığı için ürün listesini patlatmamak adına burada çekmiyoruz.
   const attempts = [
     {
-      label: "ikas products full-safe",
+      label: "ikas products categoryIds-only",
       fields: `
         id
         name
-        createdAt
-        updatedAt
-        totalStock
         categoryIds
-        categories { id name }
-        variants {
-          id
-          sku
-          barcodeList
-          variantValues { variantTypeName variantValueName }
-        }
       `
     },
     {
-      label: "ikas products categories-safe",
+      label: "ikas products minimal-only",
       fields: `
         id
         name
-        createdAt
-        updatedAt
-        totalStock
-        categoryIds
-        categories { id name }
-        variants { id sku barcodeList variantValues { variantTypeName variantValueName } }
-      `
-    },
-    {
-      label: "ikas products categoryIds-safe",
-      fields: `
-        id
-        name
-        createdAt
-        updatedAt
-        totalStock
-        categoryIds
-        variants { id sku barcodeList variantValues { variantTypeName variantValueName } }
-      `
-    },
-    {
-      label: "ikas products minimal-variants",
-      fields: `
-        id
-        name
-        totalStock
-        categoryIds
-        variants { id sku }
-      `
-    },
-    {
-      label: "ikas products bare",
-      fields: `
-        id
-        name
-        totalStock
-        categoryIds
       `
     }
   ];
@@ -953,14 +911,15 @@ async function fetchIkasProducts(categories = []) {
       });
       if (Array.isArray(products)) return products;
     } catch (error) {
-      errors.push(`${attempt.label}: ${error && error.message ? error.message : String(error)}`);
+      const msg = `${attempt.label}: ${error && error.message ? error.message : String(error)}`;
+      errors.push(msg);
+      console.error("ikas product attempt failed:", msg.slice(0, 900));
     }
   }
 
   console.error("ikas products error:", errors.join(" || ").slice(0, 1800));
   return [];
 }
-
 
 function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
   return rawProducts.map((product) => {
@@ -1163,8 +1122,10 @@ async function buildIkasSummary() {
 
   orders = enrichOrdersWithProducts(orders, products);
   products = mergeOrderImagesIntoProducts(products, orders);
-  await enrichIkasImagesDirectFromProductPages(orders, products, categories);
-  await enrichIkasImagesFromStorefront(orders, products, categories);
+  if (String(process.env.IKAS_FETCH_STOREFRONT_IMAGES || "0") === "1") {
+    await enrichIkasImagesDirectFromProductPages(orders, products, categories);
+    await enrichIkasImagesFromStorefront(orders, products, categories);
+  }
   orders = enrichOrdersWithProducts(orders, products);
   products = mergeOrderImagesIntoProducts(products, orders);
   const collections = buildCollectionsFromProducts(products, categories);
