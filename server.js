@@ -144,9 +144,15 @@ const server = http.createServer(async (req, res) => {
       return await handleLogin(req, res);
     }
 
+    if (req.method === "POST" && url.pathname === "/api/admin/logout") {
+      res.setHeader("Set-Cookie", clearAuthCookie());
+      return sendJson(res, { ok: true });
+    }
+
     if (url.pathname.startsWith("/api/admin/")) {
       const admin = requireAdmin(req, res);
       if (!admin) return;
+      req.admin = admin;
       return await handleAdminApi(req, res, url);
     }
 
@@ -301,6 +307,7 @@ async function handleLogin(req, res) {
 
   console.log("Admin login success:", username);
   const token = signToken({ sub: username, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 30 });
+  res.setHeader("Set-Cookie", authCookie(token));
   sendJson(res, { ok: true, token, user: { username } });
 }
 
@@ -308,7 +315,7 @@ async function handleAdminApi(req, res, url) {
   const pathname = url.pathname;
 
   if (req.method === "GET" && pathname === "/api/admin/me") {
-    const admin = verifyToken(String(req.headers.authorization || "").startsWith("Bearer ") ? String(req.headers.authorization || "").slice(7) : "");
+    const admin = req.admin || {};
     return sendJson(res, {
       ok: true,
       user: { username: admin && admin.sub ? admin.sub : ADMIN_USERS[0].username },
@@ -2353,6 +2360,7 @@ function adminHtml() {
 
           fetch('/api/admin/login', {
             method: 'POST',
+            credentials: 'same-origin',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               username: (userEl && userEl.value || '').trim(),
@@ -2514,13 +2522,13 @@ function adminHtml() {
   function applyDateFilter(list){var r=activeDateRange(); if(!list||datePreset==='all')return (list||[]).slice(); return (list||[]).filter(function(o){var t=orderTime(o); return t && t>=r.start && t<r.end})}
   function syncDateControls(){qsa('[data-date-filter]').forEach(function(w){var sel=w.querySelector('[data-date-preset]'); var st=w.querySelector('[data-date-start]'); var en=w.querySelector('[data-date-end]'); if(sel)sel.value=datePreset; if(st)st.value=dateStart; if(en)en.value=dateEnd; w.classList.toggle('custom',datePreset==='custom')})}
   function initDateFilters(){qsa('[data-date-filter]').forEach(function(w){var sel=w.querySelector('[data-date-preset]'); var st=w.querySelector('[data-date-start]'); var en=w.querySelector('[data-date-end]'); if(sel&&!sel.dataset.ready){sel.dataset.ready='1';sel.addEventListener('change',function(){datePreset=sel.value||'today'; ordersPage=1; allOrdersPage=1; localStorage.setItem('ruth_panel_date_preset',datePreset); syncDateControls(); renderAll(); renderIkas()})} [st,en].forEach(function(inp){if(inp&&!inp.dataset.ready){inp.dataset.ready='1';inp.addEventListener('change',function(){dateStart=st&&st.value||''; dateEnd=en&&en.value||''; ordersPage=1; allOrdersPage=1; localStorage.setItem('ruth_panel_date_start',dateStart); localStorage.setItem('ruth_panel_date_end',dateEnd); renderAll(); renderIkas()})}})}); syncDateControls()}
-  function api(path,opts){opts=opts||{}; opts.headers=opts.headers||{}; opts.headers['Content-Type']='application/json'; if(token) opts.headers.Authorization='Bearer '+token; return fetch(path,opts).then(function(r){return r.text().then(function(t){var d={}; try{d=t?JSON.parse(t):{}}catch(e){} if(!r.ok){if(r.status===401 && path==='/api/admin/me') logout(false); throw new Error(d.error||d.message||'İstek başarısız')} return d})})}
+  function api(path,opts){opts=opts||{}; opts.headers=opts.headers||{}; opts.credentials='same-origin'; opts.headers['Content-Type']='application/json'; if(token) opts.headers.Authorization='Bearer '+token; return fetch(path,opts).then(function(r){return r.text().then(function(t){var d={}; try{d=t?JSON.parse(t):{}}catch(e){} if(!r.ok){if(r.status===401 && path==='/api/admin/me') logout(false); throw new Error(d.error||d.message||'İstek başarısız')} return d})})}
   function toast(msg){var el=$('toast'); el.textContent=msg; el.classList.add('show'); clearTimeout(toast._t); toast._t=setTimeout(function(){el.classList.remove('show')},2200)}
   function prettifyUser(u){u=String(u||'Yönetici').trim(); return u?u.charAt(0).toLocaleUpperCase('tr-TR')+u.slice(1):'Yönetici'}
   function loadMe(){api('/api/admin/me').then(function(me){var name=prettifyUser(me&&me.user&&me.user.username); setText('welcomeUser',name); setText('profileName',name)}).catch(function(){})}
 
   function showApp(){ $('loginPage').classList.add('hidden'); $('app').classList.remove('hidden'); loadMe(); initDateFilters(); setRoute(routeFromPath(),false); loadAll(); }
-  function logout(push){token=''; localStorage.removeItem('ruth_admin_token'); $('app').classList.add('hidden'); $('loginPage').classList.remove('hidden'); if(push!==false) history.replaceState(null,'','/admin/'); }
+  function logout(push){token=''; localStorage.removeItem('ruth_admin_token'); try{fetch('/api/admin/logout',{method:'POST',credentials:'same-origin'}).catch(function(){})}catch(e){} $('app').classList.add('hidden'); $('loginPage').classList.remove('hidden'); if(push!==false) history.replaceState(null,'','/admin/'); }
   on('loginForm','submit',function(e){e.preventDefault(); setText('loginError',''); var btn=document.querySelector('#loginForm button[type="submit"]'); if(btn)btn.disabled=true; api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token||''; if(!token){throw new Error('token alınamadı')} localStorage.setItem('ruth_admin_token',token); location.reload();}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message); if(btn)btn.disabled=false;})});
   on('logoutBtn','click',function(){logout()});
   on('collapseBtn','click',function(){ $('app').classList.toggle('nav-mini') });
@@ -2627,25 +2635,23 @@ function adminHtml() {
   on('pushBtn','click',subscribePush);
   function subscribePush(){ if(!('serviceWorker' in navigator)||!('PushManager' in window)){alert('Bu tarayıcı bildirim desteklemiyor.');return;} api('/api/admin/me').then(function(me){if(!me.vapidPublicKey)throw new Error('VAPID key yok'); return navigator.serviceWorker.register('/sw.js').then(function(reg){return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)})})}).then(function(sub){return api('/api/admin/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub})})}).then(function(){toast('Bildirimler açıldı')}).catch(function(err){alert('Bildirim açılamadı: '+err.message)})}
   function urlBase64ToUint8Array(base64String){var padding='='.repeat((4-base64String.length%4)%4); var base64=(base64String+padding).replace(/-/g,'+').replace(/_/g,'/'); var raw=atob(base64); var arr=new Uint8Array(raw.length); for(var i=0;i<raw.length;++i)arr[i]=raw.charCodeAt(i); return arr}
-  if(token){
-    fetch('/api/admin/me', {
-      headers: { Authorization: 'Bearer ' + token }
-    })
-    .then(function(r){
-      if(!r.ok) throw new Error('unauthorized');
-      return r.json();
-    })
-    .then(function(){
-      showApp();
-    })
-    .catch(function(){
-      token = '';
-      localStorage.removeItem('ruth_admin_token');
-      $('loginPage').classList.remove('hidden');
-    });
-  } else {
-    $('loginPage').classList.remove('hidden');
-  }
+  (function bootAuth(){
+    var headers = {};
+    if(token) headers.Authorization = 'Bearer ' + token;
+    fetch('/api/admin/me', { headers: headers, credentials: 'same-origin' })
+      .then(function(r){
+        if(!r.ok) throw new Error('unauthorized');
+        return r.json();
+      })
+      .then(function(){
+        showApp();
+      })
+      .catch(function(){
+        token = '';
+        localStorage.removeItem('ruth_admin_token');
+        $('loginPage').classList.remove('hidden');
+      });
+  })();
 })();
 </script>
 
@@ -2661,6 +2667,7 @@ function adminHtml() {
 
         fetch('/api/admin/login', {
           method: 'POST',
+          credentials: 'same-origin',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             username: (userEl && userEl.value || '').trim(),
@@ -2725,8 +2732,9 @@ function adminHtml() {
 
 function requireAdmin(req, res) {
   const header = String(req.headers.authorization || "");
-  const token = header.startsWith("Bearer ") ? header.slice(7) : "";
-  const payload = verifyToken(token);
+  const bearerToken = header.startsWith("Bearer ") ? header.slice(7) : "";
+  const cookieToken = readCookie(req, "ruth_admin_token");
+  const payload = verifyToken(bearerToken) || verifyToken(cookieToken);
   if (!payload || !isKnownAdmin(payload.sub)) {
     sendJson(res, { ok: false, error: "unauthorized" }, 401);
     return null;
@@ -2758,6 +2766,29 @@ function safeEqual(a, b) {
   const left = Buffer.from(String(a));
   const right = Buffer.from(String(b));
   return left.length === right.length && crypto.timingSafeEqual(left, right);
+}
+
+function readCookie(req, name) {
+  const raw = String(req.headers.cookie || "");
+  const parts = raw.split(/;\s*/);
+  for (const part of parts) {
+    const index = part.indexOf("=");
+    if (index < 0) continue;
+    const key = part.slice(0, index);
+    const value = part.slice(index + 1);
+    if (key === name) {
+      try { return decodeURIComponent(value); } catch (error) { return value; }
+    }
+  }
+  return "";
+}
+
+function authCookie(token) {
+  return `ruth_admin_token=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${60 * 60 * 24 * 30}`;
+}
+
+function clearAuthCookie() {
+  return "ruth_admin_token=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0";
 }
 
 function readJson(req, limit = 1_000_000) {
