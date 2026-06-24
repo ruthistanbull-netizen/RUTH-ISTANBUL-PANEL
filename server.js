@@ -83,7 +83,7 @@ const IKAS_CLIENT_SECRET = String(process.env.IKAS_CLIENT_SECRET || "").trim();
 const IKAS_GRAPHQL_URL = String(process.env.IKAS_GRAPHQL_URL || "https://api.myikas.com/api/v1/admin/graphql").trim();
 const IKAS_TOKEN_URL = IKAS_STORE_NAME ? `https://${IKAS_STORE_NAME}.myikas.com/api/admin/oauth/token` : "";
 const IKAS_STOREFRONT_URL = normalizeStorefrontUrl(process.env.IKAS_STOREFRONT_URL || process.env.RUTH_SITE_URL || "https://ruthistanbul.com");
-const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_FETCH_STOREFRONT_IMAGES || "0") === "1";
+const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_PRODUCT_IMAGES_DISABLED || "0") !== "1";
 let ikasTokenCache = { token: "", expiresAt: 0 };
 let storefrontImageCache = { expiresAt: 0, bySlug: new Map(), byName: new Map(), urls: [] };
 let ikasSummaryCache = { expiresAt: 0, value: null };
@@ -982,6 +982,25 @@ async function fetchIkasProducts(categories = []) {
   // Variant alanları mağazaya göre farklı çıktığı için ürün listesini patlatmamak adına burada çekmiyoruz.
   const attempts = [
     {
+      label: "ikas products image-url-fields",
+      fields: `
+        id
+        name
+        categoryIds
+        images { id imageId url imageUrl }
+      `
+    },
+    {
+      label: "ikas products image-id-fields",
+      fields: `
+        id
+        name
+        categoryIds
+        mainImageId
+        images { id imageId }
+      `
+    },
+    {
       label: "ikas products categoryIds-only",
       fields: `
         id
@@ -1019,6 +1038,57 @@ async function fetchIkasProducts(categories = []) {
   console.error("ikas products error:", errors.join(" || ").slice(0, 1800));
   return [];
 }
+
+
+function extractIkasImageValue(value, depth = 0) {
+  if (!value || depth > 4) return "";
+  if (typeof value === "string") {
+    const raw = value.trim();
+    if (!raw) return "";
+    if (/^https?:\/\//i.test(raw) || /^data:image\//i.test(raw)) return raw;
+    // uuid / imageId gibi değerler için IKAS_IMAGE_BASE_URL tanımlıysa URL kur.
+    if (/^[a-z0-9_-]{8,}$/i.test(raw)) return buildIkasImageUrl(raw);
+    return "";
+  }
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = extractIkasImageValue(item, depth + 1);
+      if (found) return found;
+    }
+    return "";
+  }
+  if (typeof value === "object") {
+    const priorityKeys = ["url", "imageUrl", "imageURL", "src", "thumbnailUrl", "cdnUrl", "image", "mainImage", "mainImageUrl", "mainImageId", "imageId", "fileId"];
+    for (const key of priorityKeys) {
+      if (Object.prototype.hasOwnProperty.call(value, key)) {
+        const found = extractIkasImageValue(value[key], depth + 1);
+        if (found) return found;
+      }
+    }
+    for (const key of Object.keys(value)) {
+      if (!/image|photo|media|file|url|src/i.test(key)) continue;
+      const found = extractIkasImageValue(value[key], depth + 1);
+      if (found) return found;
+    }
+  }
+  return "";
+}
+
+function extractIkasProductImage(product) {
+  if (!product || typeof product !== "object") return "";
+  return extractIkasImageValue([
+    product.image,
+    product.imageUrl,
+    product.thumbnailUrl,
+    product.mainImage,
+    product.mainImageUrl,
+    product.mainImageId,
+    product.images,
+    product.media,
+    product.files
+  ]);
+}
+
 
 function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
   return rawProducts.map((product) => {
@@ -1058,7 +1128,7 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
         name: valueOrEmpty(product.name) || "Ürün",
         sku: valueOrEmpty(variant.sku),
         barcode: Array.isArray(variant.barcodeList) ? variant.barcodeList.join(", ") : "",
-        mainImageId: "",
+        mainImageId: valueOrEmpty(product.mainImageId || product.imageId),
         image: "",
         productId: valueOrEmpty(product.id),
         slug: "",
@@ -1070,7 +1140,7 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
       };
     }) : [];
 
-    const image = "";
+    const image = extractIkasProductImage(product);
     return {
       id: valueOrEmpty(product.id),
       name: valueOrEmpty(product.name) || "Ürün",
@@ -1221,7 +1291,7 @@ async function buildIkasSummary() {
 
   orders = enrichOrdersWithProducts(orders, products);
   products = mergeOrderImagesIntoProducts(products, orders);
-  if (String(process.env.IKAS_FETCH_STOREFRONT_IMAGES || "0") === "1") {
+  if (IKAS_FETCH_STOREFRONT_IMAGES) {
     await enrichIkasImagesDirectFromProductPages(orders, products, categories);
     await enrichIkasImagesFromStorefront(orders, products, categories);
   }
@@ -1377,7 +1447,7 @@ function buildIkasImageUrl(mainImageId) {
   const id = valueOrEmpty(mainImageId);
   if (!id) return "";
   if (/^https?:\/\//i.test(id)) return id;
-  const base = String(process.env.IKAS_IMAGE_BASE_URL || "").trim().replace(/\/+$/, "");
+  const base = String(process.env.IKAS_IMAGE_BASE_URL || process.env.IKAS_CDN_URL || "").trim().replace(/\/+$/, "");
   if (base) return `${base}/${encodeURIComponent(id)}`;
   return "";
 }
@@ -1490,11 +1560,25 @@ function buildStorefrontProductUrlCandidates(item) {
     }
   });
 
-  const unique = [...new Set(slugs)].slice(0, 8);
-  return unique.map((slug) => {
-    if (/^https?:\/\//i.test(slug)) return slug;
-    return new URL(`/${slug}`, IKAS_STOREFRONT_URL).toString();
+  const unique = [...new Set(slugs)].slice(0, 10);
+  const urls = [];
+  unique.forEach((slug) => {
+    if (/^https?:\/\//i.test(slug)) {
+      urls.push(slug);
+      return;
+    }
+    [
+      `/${slug}`,
+      `/products/${slug}`,
+      `/product/${slug}`,
+      `/urun/${slug}`,
+      `/ürün/${slug}`,
+      `/p/${slug}`,
+      `/tr/products/${slug}`,
+      `/tr/urun/${slug}`
+    ].forEach((path) => urls.push(new URL(path, IKAS_STOREFRONT_URL).toString()));
   });
+  return [...new Set(urls)].slice(0, 24);
 }
 
 async function enrichIkasImagesFromStorefront(orders, products, categories) {
@@ -1604,7 +1688,14 @@ async function discoverStorefrontProductUrls() {
 
 function isLikelyProductUrl(url) {
   const text = String(url || "");
-  return /\/(products|product|urun|ürün)\//i.test(text);
+  if (/\/(products|product|urun|ürün|p)\//i.test(text)) return true;
+  // ikas bazı temalarda ürünleri direkt /the-golden-ring gibi kök slug ile tutabiliyor.
+  try {
+    const u = new URL(text);
+    const parts = u.pathname.split("/").filter(Boolean);
+    if (parts.length === 1 && /ring|necklace|bracelet|set|kolye|yuzuk|yüzük|bileklik|earring|küpe|kupe/i.test(parts[0])) return true;
+  } catch (error) {}
+  return false;
 }
 
 function extractProductUrlsFromHtml(html, baseUrl) {
@@ -2330,6 +2421,10 @@ function adminHtml(serverAdmin) {
     @media(max-width:1180px){.layout-overview{grid-template-columns:1fr}.right-rail{grid-template-columns:1fr 1fr}.metrics{grid-template-columns:repeat(2,1fr)}.modules,.bottom-grid{grid-template-columns:1fr}.support-grid,.crm-grid,.orders-grid{grid-template-columns:1fr;height:auto}.panel{min-height:360px}.page-head{align-items:flex-start;flex-direction:column}.head-tools{width:100%;justify-content:flex-start}.date-filter{width:100%}.date-select{flex:1;min-width:160px}.date-input{flex:1;min-width:130px}}
     @media(max-width:820px){body{overflow-y:auto;overflow-x:hidden}.app{display:block;height:auto;min-height:100dvh}.sidebar{position:fixed;left:0;top:0;bottom:0;width:286px;transform:translateX(-104%);box-shadow:var(--shadow)}.app.mobile-open .sidebar{transform:translateX(0)}.drawer-shade{display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:35}.app.mobile-open .drawer-shade{display:block}.main{min-height:100dvh}.topbar{padding:0 14px}.mobile-menu{display:grid}.top-actions .top-icon:nth-child(1),.profile-copy{display:none}.content{padding:14px}.welcome{height:auto;display:block;padding:20px}.date-pill{margin-top:16px;width:100%}.metrics{grid-template-columns:1fr}.right-rail{grid-template-columns:1fr}.support-grid,.crm-grid{gap:12px}.modules{gap:12px}.module{min-height:170px}.bottom-grid{gap:12px}.message-space{min-height:360px}.msg{max-width:88%}.date-filter{display:grid;grid-template-columns:1fr}.date-custom{grid-template-columns:1fr auto 1fr}.date-filter.custom .date-custom{display:grid}}
 .pager{display:flex;align-items:center;justify-content:center;gap:8px;margin:16px 0 6px;flex-wrap:wrap}.pager button{min-width:36px;height:34px;border:1px solid var(--line);border-radius:9px;background:rgba(255,255,255,.035);color:var(--text);font-weight:780}.pager button:hover{border-color:rgba(212,162,55,.42);background:rgba(255,255,255,.065)}.pager button.active{background:linear-gradient(180deg,#efc86b,#b9862a);color:#130c03;border-color:#c99737}.pager button:disabled{opacity:.45;cursor:not-allowed}.search-box{min-width:220px;max-width:320px}.welcome .date-filter{margin-left:auto}.welcome .date-select,.welcome .date-input{background:#0c0d0f}@media(max-width:820px){.search-box{min-width:0;max-width:none;width:100%}.page-head{align-items:flex-start}.head-tools{width:100%;justify-content:stretch}.head-tools .btn,.head-tools .search-box{width:100%}.welcome .date-filter{margin-top:16px;width:100%;margin-left:0}.pager{justify-content:flex-start}.order-card,.product-card{overflow:hidden}}
+  
+      .prod-img img{width:100%;height:100%;object-fit:cover;display:block;border-radius:inherit}
+      .prod-img.large{width:82px;height:82px}
+
   </style>
 </head>
 <body>
