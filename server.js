@@ -1572,7 +1572,7 @@ async function enrichIkasImagesDirectFromProductPages(orders, products, categori
   });
 
   if (!targets.length) return;
-  const limit = Math.max(1, Math.min(220, Number(process.env.IKAS_DIRECT_IMAGE_LIMIT || 180)));
+  const limit = Math.max(1, Math.min(220, Number(process.env.IKAS_DIRECT_IMAGE_LIMIT || 220)));
   const limited = targets.slice(0, limit);
   const concurrency = Math.max(1, Math.min(3, Number(process.env.IKAS_DIRECT_IMAGE_CONCURRENCY || 2)));
   let index = 0;
@@ -1690,7 +1690,7 @@ async function enrichIkasImagesFromStorefront(orders, products, categories) {
   if (!IKAS_FETCH_STOREFRONT_IMAGES || !IKAS_STOREFRONT_URL) return;
   let imageMap = null;
   try {
-    imageMap = await getStorefrontImageMap();
+    imageMap = await getStorefrontImageMap(products);
   } catch (error) {
     console.error("storefront image map error:", error && error.message ? error.message : error);
     return;
@@ -1709,6 +1709,8 @@ async function enrichIkasImagesFromStorefront(orders, products, categories) {
     const nameKeys = [item.baseName, item.name].map(normalizeLookupText).filter(Boolean);
     for (const key of nameKeys) {
       if (imageMap.byName.has(key)) return imageMap.byName.get(key).image || "";
+      const noThe = key.replace(/^the-/, "");
+      if (noThe && imageMap.byName.has(noThe)) return imageMap.byName.get(noThe).image || "";
     }
     return "";
   };
@@ -1737,13 +1739,136 @@ async function enrichIkasImagesFromStorefront(orders, products, categories) {
   });
 }
 
-async function getStorefrontImageMap() {
+
+function extractImageUrlFromImgTag(tag, baseUrl) {
+  const html = String(tag || "");
+  const srcset = pickAttr(html, "srcset") || pickAttr(html, "data-srcset");
+  if (srcset) {
+    const first = srcset.split(",").map((part) => part.trim().split(/\s+/)[0]).filter(Boolean)[0];
+    if (first) return absolutizeUrl(first, baseUrl);
+  }
+  const raw =
+    pickAttr(html, "src") ||
+    pickAttr(html, "data-src") ||
+    pickAttr(html, "data-original") ||
+    pickAttr(html, "data-lazy") ||
+    pickAttr(html, "data-url") ||
+    "";
+  return absolutizeUrl(raw, baseUrl);
+}
+
+function pickAttr(html, attr) {
+  const pattern = new RegExp(attr + "\\\\s*=\\\\s*[\\\"']([^\\\"']+)[\\\"']", "i");
+  const match = String(html || "").match(pattern);
+  return match ? decodeHtmlEntity(match[1]) : "";
+}
+
+function stripTags(value) {
+  return decodeHtmlEntity(String(value || "").replace(/<script[\s\S]*?<\/script>/gi, " ").replace(/<style[\s\S]*?<\/style>/gi, " ").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim());
+}
+
+function findBestProductNameNearImage(cleanText, knownProductNames) {
+  const text = normalizeLookupText(cleanText);
+  if (!text) return "";
+  let best = "";
+  let bestLen = 0;
+  (knownProductNames || []).forEach((name) => {
+    const key = normalizeLookupText(name);
+    if (!key || key.length < 3) return;
+    if (text.includes(key) && key.length > bestLen) {
+      best = name;
+      bestLen = key.length;
+      return;
+    }
+    const noThe = key.replace(/^the-/, "");
+    if (noThe && noThe.length > 3 && text.includes(noThe) && noThe.length > bestLen) {
+      best = name;
+      bestLen = noThe.length;
+    }
+  });
+  return best;
+}
+
+function extractProductImagesFromListingHtml(html, baseUrl, knownProductNames = []) {
+  const results = [];
+  const source = String(html || "");
+  const imgRe = /<img\b[^>]*>/gi;
+  let match;
+  while ((match = imgRe.exec(source))) {
+    const tag = match[0];
+    const image = extractImageUrlFromImgTag(tag, baseUrl);
+    if (!image || !/^https?:\/\//i.test(image)) continue;
+    if (!/cdn\.myikas\.com|images|uploads|cdn/i.test(image)) continue;
+
+    const alt = cleanStorefrontTitle(pickAttr(tag, "alt") || pickAttr(tag, "title") || "");
+    const start = Math.max(0, match.index - 1400);
+    const end = Math.min(source.length, match.index + tag.length + 1800);
+    const nearbyText = stripTags(source.slice(start, end));
+
+    let title = alt && normalizeLookupText(alt).length > 2 ? alt : "";
+    if (!title) title = findBestProductNameNearImage(nearbyText, knownProductNames);
+    if (!title) continue;
+
+    results.push({
+      url: baseUrl,
+      slug: slugifyForUrl(title),
+      title,
+      image
+    });
+  }
+  return results;
+}
+
+async function enrichStorefrontImageMapFromListingPages(bySlug, byName, products = []) {
+  if (!IKAS_STOREFRONT_URL) return;
+  const knownNames = (products || []).map((p) => p && p.name).filter(Boolean);
+  const pagePaths = [
+    "/",
+    "/all-products",
+    "/search",
+    "/rings",
+    "/pendants",
+    "/necklaces",
+    "/bracelets",
+    "/sets",
+    "/collections",
+    "/shop",
+    "/all",
+    "/ruth-atelier",
+    "/nazar",
+    "/sun-kissed",
+    "/arya",
+    "/huna",
+    "/bags"
+  ];
+
+  const pages = [...new Set(pagePaths.map((pathName) => new URL(pathName, IKAS_STOREFRONT_URL).toString()))];
+  let found = 0;
+  for (const pageUrl of pages) {
+    try {
+      const html = await fetchText(pageUrl);
+      const items = extractProductImagesFromListingHtml(html, pageUrl, knownNames);
+      items.forEach((info) => {
+        if (!info || !info.image) return;
+        const slugKey = normalizeSlug(info.slug || info.title);
+        const nameKey = normalizeLookupText(info.title);
+        if (slugKey && !bySlug.has(slugKey)) bySlug.set(slugKey, info);
+        if (nameKey && !byName.has(nameKey)) byName.set(nameKey, info);
+        found += 1;
+      });
+    } catch (error) {}
+  }
+  if (found && String(process.env.IKAS_IMAGE_DEBUG_LOGS || "0") === "1") console.log(`Ikas listing images matched: ${found}`);
+}
+
+
+async function getStorefrontImageMap(products = []) {
   const now = Date.now();
   if (storefrontImageCache.expiresAt > now) return storefrontImageCache;
   const bySlug = new Map();
   const byName = new Map();
   const urls = await discoverStorefrontProductUrls();
-  const limited = urls.slice(0, Number(process.env.IKAS_STOREFRONT_IMAGE_LIMIT || 180));
+  const limited = urls.slice(0, Number(process.env.IKAS_STOREFRONT_IMAGE_LIMIT || 220));
   const concurrency = Math.max(1, Math.min(3, Number(process.env.IKAS_STOREFRONT_IMAGE_CONCURRENCY || 2)));
   let index = 0;
   async function worker() {
@@ -1758,6 +1883,7 @@ async function getStorefrontImageMap() {
     }
   }
   await Promise.all(Array.from({ length: concurrency }, worker));
+  await enrichStorefrontImageMapFromListingPages(bySlug, byName, products);
   storefrontImageCache = { expiresAt: now + 30 * 60 * 1000, bySlug, byName, urls: limited };
   return storefrontImageCache;
 }
