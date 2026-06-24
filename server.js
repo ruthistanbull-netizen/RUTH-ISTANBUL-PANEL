@@ -2447,7 +2447,7 @@ function adminHtml() {
   function qsa(sel){return Array.prototype.slice.call(document.querySelectorAll(sel))}
   function setText(id,val){var el=$(id); if(el) el.textContent=(val===undefined||val===null)?'':String(val)}
   function escapeHtml(v){return String(v||'').replace(/[&<>"']/g,function(m){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[m]})}
-  function escapeAttr(v){return escapeHtml(v).replace(/`/g,'&#096;')}
+  function escapeAttr(v){return escapeHtml(v).replace(new RegExp(String.fromCharCode(96),'g'),'&#096;')}
   function fmtDate(v){if(!v)return '-'; try{return new Date(v).toLocaleString('tr-TR',{timeZone:ISTANBUL_TZ,day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'})}catch(e){return v}}
   function today(){try{return new Date().toLocaleString('tr-TR',{timeZone:ISTANBUL_TZ,day:'2-digit',month:'long',year:'numeric',hour:'2-digit',minute:'2-digit'})}catch(e){return 'Bugün'}}
   function trParts(d){var parts=new Intl.DateTimeFormat('en-CA',{timeZone:ISTANBUL_TZ,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(d||new Date()); var out={}; parts.forEach(function(p){out[p.type]=p.value}); return {year:Number(out.year),month:Number(out.month),day:Number(out.day)}}
