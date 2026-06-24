@@ -157,7 +157,7 @@ const server = http.createServer(async (req, res) => {
           name: p.name || "",
           categoryNames: p.categoryNames || [],
           slugGuess: slugifyForUrl(p.name || ""),
-          candidateUrl: p.name ? new URL("/" + slugifyForUrl(p.name), IKAS_STOREFRONT_URL).toString() : ""
+          candidateUrl: (buildStorefrontProductUrlCandidates({ name: p.name || "", baseName: p.name || "", slug: p.slug || "" })[0]) || (p.name ? new URL("/" + slugifyForUrl(p.name), IKAS_STOREFRONT_URL).toString() : "")
         }));
         return sendJson(res, {
           ok: true,
@@ -188,9 +188,11 @@ const server = http.createServer(async (req, res) => {
         const withImage = products.filter((p) => p.image).length;
         const rows = missing.map((p, index) => {
           const slug = slugifyForUrl(p.name || "");
-          const candidate = p.name ? new URL("/" + slug, IKAS_STOREFRONT_URL).toString() : "";
+          const candidates = buildStorefrontProductUrlCandidates({ name: p.name || "", baseName: p.name || "", slug: p.slug || "" }).slice(0, 5);
+          const candidate = candidates[0] || (p.name ? new URL("/" + slug, IKAS_STOREFRONT_URL).toString() : "");
+          const candidateLinks = candidates.length ? candidates.map((u) => `<a href="${escapeHtmlServer(u)}" target="_blank">${escapeHtmlServer(u)}</a>`).join("<br>") : (candidate ? `<a href="${escapeHtmlServer(candidate)}" target="_blank">${escapeHtmlServer(candidate)}</a>` : "-");
           const cats = (p.categoryNames || []).join(", ");
-          return `<tr><td>${index + 1}</td><td>${escapeHtmlServer(p.name || "")}</td><td>${escapeHtmlServer(cats || "-")}</td><td>${escapeHtmlServer(slug)}</td><td style="word-break:break-all">${candidate ? `<a href="${escapeHtmlServer(candidate)}" target="_blank">${escapeHtmlServer(candidate)}</a>` : "-"}</td></tr>`;
+          return `<tr><td>${index + 1}</td><td>${escapeHtmlServer(p.name || "")}</td><td>${escapeHtmlServer(cats || "-")}</td><td>${escapeHtmlServer(slug)}</td><td style="word-break:break-all">${candidateLinks}</td></tr>`;
         }).join("");
         const busy = summary.__busy ? `<p class="warn">Fotoğraf taraması devam ediyor. 20-30 saniye sonra yenile.</p>` : "";
         return sendHtml(res, `<!doctype html><html><head><meta charset="utf-8"><title>Ruth Eksik Fotoğraflar</title>${summary.__busy ? '<meta http-equiv="refresh" content="8">' : ''}<style>body{background:#0b0b0c;color:#f4ead8;font-family:Arial;padding:24px}a{color:#f1c76a}table{width:100%;border-collapse:collapse;margin-top:16px}td,th{border-bottom:1px solid #333;padding:10px;text-align:left;vertical-align:top}.ok{color:#f1c76a}.warn{color:#f1c76a;background:#15120b;border:1px solid #3a3325;padding:10px 14px;border-radius:12px;display:inline-block}.muted{color:#a99f8d}.card{display:inline-block;border:1px solid #3a3325;background:#15120b;border-radius:12px;padding:10px 14px;margin:8px 0}</style></head><body><h1>RUTH IKAS Fotoğrafsız Ürünler</h1>${busy}<div class="card"><p class="ok">Toplam ürün: ${products.length}</p><p class="ok">Fotoğraflı: ${withImage}</p><p class="ok">Fotoğrafsız: ${missing.length}</p><p class="muted">Bu listedeki ürünlerde eşleşen fotoğraf bulunamadı. Aday URL sütunu ürün adıyla tahmini sayfayı gösterir.</p></div><table><thead><tr><th>#</th><th>Ürün</th><th>Kategori</th><th>Slug tahmini</th><th>Aday URL</th></tr></thead><tbody>${rows || '<tr><td colspan="5">Fotoğrafsız ürün yok.</td></tr>'}</tbody></table></body></html>`);
@@ -1492,6 +1494,31 @@ function buildIkasImageUrl(mainImageId) {
 }
 
 
+
+const RUTH_PRODUCT_SLUG_MAP = new Map([
+  ["hraesvelgr", ["hrsvelgr"]],
+  ["hrasvelgr", ["hrsvelgr"]],
+  ["hr-svelgr", ["hrsvelgr"]],
+  ["sekia-ring", ["sekia"]],
+  ["sekia-ring-ayarlanabilir", ["sekia"]],
+  ["the-ancient-coin-necklace", ["ancient-coin-necklace"]],
+  ["the-ancient-hamsa-hand-necklace", ["ancient-hamsa-hand-necklace"]],
+  ["the-ancient-sage-necklace", ["ancient-sage-necklace"]],
+  ["the-ancient-poetry-ring", ["ancient-poetry-ring-brass"]],
+  ["the-crystal-mine-ring", ["crystal-mine-ring"]],
+  ["the-pirates-treasure-ring", ["the-pirates-treasure-ring"]],
+  ["pirates-treasure-ring", ["the-pirates-treasure-ring"]]
+]);
+
+function addMappedRuthProductSlugs(slugs) {
+  const existing = [...slugs];
+  existing.forEach((slug) => {
+    const key = normalizeSlug(slug);
+    const mapped = RUTH_PRODUCT_SLUG_MAP.get(key);
+    if (mapped) mapped.forEach((value) => slugs.push(value));
+  });
+}
+
 async function enrichIkasImagesDirectFromProductPages(orders, products, categories) {
   if (!IKAS_FETCH_STOREFRONT_IMAGES || !IKAS_STOREFRONT_URL) return;
   const targets = [];
@@ -1519,7 +1546,7 @@ async function enrichIkasImagesDirectFromProductPages(orders, products, categori
   });
 
   if (!targets.length) return;
-  const limit = Math.max(1, Math.min(80, Number(process.env.IKAS_DIRECT_IMAGE_LIMIT || 45)));
+  const limit = Math.max(1, Math.min(140, Number(process.env.IKAS_DIRECT_IMAGE_LIMIT || 110)));
   const limited = targets.slice(0, limit);
   const concurrency = Math.max(1, Math.min(3, Number(process.env.IKAS_DIRECT_IMAGE_CONCURRENCY || 2)));
   let index = 0;
@@ -1614,7 +1641,8 @@ function buildStorefrontProductUrlCandidates(item) {
     });
   });
 
-  const unique = [...new Set(slugs)].slice(0, 18);
+  addMappedRuthProductSlugs(slugs);
+  const unique = [...new Set(slugs)].slice(0, 24);
   const urls = [];
   unique.forEach((slug) => {
     if (/^https?:\/\//i.test(slug)) {
@@ -1689,7 +1717,7 @@ async function getStorefrontImageMap() {
   const bySlug = new Map();
   const byName = new Map();
   const urls = await discoverStorefrontProductUrls();
-  const limited = urls.slice(0, Number(process.env.IKAS_STOREFRONT_IMAGE_LIMIT || 80));
+  const limited = urls.slice(0, Number(process.env.IKAS_STOREFRONT_IMAGE_LIMIT || 180));
   const concurrency = Math.max(1, Math.min(3, Number(process.env.IKAS_STOREFRONT_IMAGE_CONCURRENCY || 2)));
   let index = 0;
   async function worker() {
@@ -1729,7 +1757,10 @@ async function discoverStorefrontProductUrls() {
   // Sitemap boşsa veya ürün vermiyorsa ana sayfa + koleksiyon sayfalarını tara.
   const seedPaths = [
     "/",
+    "/all-products",
+    "/search",
     "/rings",
+    "/pendants",
     "/necklaces",
     "/bracelets",
     "/sets",
@@ -1740,7 +1771,8 @@ async function discoverStorefrontProductUrls() {
     "/nazar",
     "/sun-kissed",
     "/arya",
-    "/huna"
+    "/huna",
+    "/bags"
   ];
 
   for (const pathName of seedPaths) {
