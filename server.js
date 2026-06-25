@@ -751,6 +751,35 @@ async function handleAdminApi(req, res, url) {
     });
   }
 
+  if (req.method === "GET" && pathname === "/api/admin/ikas/variant-debug") {
+    try {
+      const query = `
+        query {
+          variantType: __type(name: "Variant") {
+            name
+            fields { name type { kind name ofType { kind name ofType { kind name } } } }
+          }
+          productType: __type(name: "Product") {
+            name
+            fields { name type { kind name ofType { kind name ofType { kind name } } } }
+          }
+          queryType: __schema {
+            queryType {
+              fields { name }
+            }
+          }
+        }
+      `;
+      const data = await ikasGraphQL(query, {}, "ikas variant debug");
+      const variantFields = (((data || {}).variantType || {}).fields || []).map((field) => field.name);
+      const productFields = (((data || {}).productType || {}).fields || []).map((field) => field.name);
+      const queryFields = (((((data || {}).queryType || {}).queryType || {}).fields) || []).map((field) => field.name).filter((name) => /variant|option|value|attribute|product/i.test(name));
+      return sendJson(res, { ok: true, variantFields, productFields, queryFields, raw: data });
+    } catch (error) {
+      return sendJson(res, { ok: false, error: error && error.message ? error.message : "variant_debug_failed" }, 500);
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/ikas/summary") {
     try {
       const fast = url.searchParams.get("fast") === "1";
@@ -1262,7 +1291,7 @@ async function fetchIkasProducts(categories = []) {
   // Variant alanları mağazaya göre farklı çıktığı için ürün listesini patlatmamak adına burada çekmiyoruz.
   const attempts = [
     {
-      label: "ikas products variants-values-prices",
+      label: "ikas products variants-value-ids-prices",
       fields: `
         id
         name
@@ -1270,27 +1299,8 @@ async function fetchIkasProducts(categories = []) {
         variants {
           id
           sku
-          variantValues {
-            variantTypeName
-            variantValueName
-          }
+          variantValueIds
           prices { sellPrice discountPrice }
-        }
-      `
-    },
-    {
-      label: "ikas products variants-values-only",
-      fields: `
-        id
-        name
-        categoryIds
-        variants {
-          id
-          sku
-          variantValues {
-            variantTypeName
-            variantValueName
-          }
         }
       `
     },
@@ -1406,6 +1416,9 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
               variantTypeName: valueOrEmpty(value.variantTypeName),
               variantValueName: valueOrEmpty(value.variantValueName)
             })).filter((value) => value.variantValueName)
+          : [],
+        variantValueIds: Array.isArray(variant.variantValueIds)
+          ? variant.variantValueIds.map(valueOrEmpty).filter(Boolean)
           : [],
         sellPrice: Number((variant.prices && variant.prices.sellPrice) || 0),
         discountPrice: Number((variant.prices && variant.prices.discountPrice) || 0),
@@ -4822,6 +4835,15 @@ function adminHtml(serverAdmin) {
   }
 }
 
+
+
+/* V96: ikas variantValues query fix */
+#ikasVariantDebugOut{
+  max-height:340px;
+  overflow:auto;
+  white-space:pre-wrap;
+}
+
 </style>
 </head>
 <body>
@@ -4990,7 +5012,7 @@ function adminHtml(serverAdmin) {
         </div>
 
         <div id="page-integration" class="page">
-          <div class="page-head"><div><div class="page-title">ikas Entegrasyonu</div><div class="page-sub">Sipariş, ürün, koleksiyon ve hazırlık listelerini ayrı ayrı yönet.</div></div><button class="btn gold" data-route="ikas-orders">Tüm Siparişler →</button></div>
+          <div class="page-head"><div><div class="page-title">ikas Entegrasyonu</div><div class="page-sub">Sipariş, ürün, koleksiyon ve hazırlık listelerini ayrı ayrı yönet.</div></div><div class="head-tools"><button class="btn gold" data-route="ikas-orders">Tüm Siparişler →</button><button id="ikasVariantDebugBtn" class="btn ghost">Varyant Alanlarını Kontrol Et</button></div></div>
           <div class="modules">
             <button class="module" data-route="ikas-orders"><div class="module-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 7.5h11l1.1 13h-13.2l1.1-13Z"/><path d="M9 7.5a3 3 0 0 1 6 0"/><path d="M9 12h6"/><path d="M9 15.5h4"/></svg></div><h3>TÜM SİPARİŞLER</h3><p>En güncel siparişler en üstte, durumları ve ürünleriyle görünür.</p><span class="btn gold">Aç →</span></button>
             <button class="module" data-route="ikas-products"><div class="module-ico">◇</div><h3>TÜM ÜRÜNLER</h3><p>Ürün adı, fotoğraf, varyant, SKU ve stok bilgileri.</p><span class="btn gold">Aç →</span></button>
@@ -5007,7 +5029,7 @@ function adminHtml(serverAdmin) {
         <div id="page-ikas-collections" class="page"><div class="page-head"><div><div class="page-title">Tüm Koleksiyonlar</div><div class="page-sub">ikas kategori/koleksiyonları ve içindeki ürünler.</div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div><div id="ikasAllCollections" class="panel-body"><div class="empty">Koleksiyonlar yükleniyor...</div></div></div>
         <div id="page-ikas-ready-orders" class="page"><div class="page-head"><div><div class="page-title">Hazırlanacak Siparişler</div><div class="page-sub">Sadece kargoya hazır durumundaki siparişler.</div></div><div class="head-tools"><div class="date-filter" data-date-filter><select class="date-select" data-date-preset><option value="today">Bugün</option><option value="yesterday">Dün</option><option value="this_week">Bu hafta</option><option value="last_week">Geçen hafta</option><option value="this_month">Bu ay</option><option value="last_month">Geçen ay</option><option value="this_year">Bu yıl</option><option value="custom">Özel tarih</option><option value="all">Tüm zamanlar</option></select><div class="date-custom"><input class="date-input" type="date" data-date-start><span class="time">-</span><input class="date-input" type="date" data-date-end></div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div></div><div id="ikasReadyOrders" class="panel-body"><div class="empty">Hazırlanacak siparişler yükleniyor...</div></div></div>
         <div id="page-ikas-ready-products" class="page"><div class="page-head"><div><div class="page-title">Hazırlanacak Ürün Toplamları</div><div class="page-sub">Kargoya hazır siparişlerden birleştirilmiş ürün hazırlık listesi.</div></div><div class="head-tools"><div class="date-filter" data-date-filter><select class="date-select" data-date-preset><option value="today">Bugün</option><option value="yesterday">Dün</option><option value="this_week">Bu hafta</option><option value="last_week">Geçen hafta</option><option value="this_month">Bu ay</option><option value="last_month">Geçen ay</option><option value="this_year">Bu yıl</option><option value="custom">Özel tarih</option><option value="all">Tüm zamanlar</option></select><div class="date-custom"><input class="date-input" type="date" data-date-start><span class="time">-</span><input class="date-input" type="date" data-date-end></div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div></div><div id="ikasReadyProductTotals" class="panel-body"><div class="empty">Ürün toplamları yükleniyor...</div></div></div>
-        <div id="page-notifications" class="page"><div class="page-head"><div><div class="page-title">Bildirimler</div><div class="page-sub">Telefona canlı destek bildirimi gelsin diye bu cihazı kaydet.</div></div></div><div class="module-grid"><div class="module" style="align-items:flex-start;text-align:left"><div class="module-ico">🔔</div><h3>Telefon Bildirimleri</h3><p id="pushStatusText">Bildirim durumu kontrol ediliyor...</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button id="pushSetupBtn" class="btn gold" type="button">Bu Telefonda Bildirimi Aç</button><button id="pushTestBtn" class="btn ghost" type="button">Test Bildirimi Gönder</button></div><p class="page-sub" style="margin-top:12px">iPhone kullanıyorsan: Safari’de paneli aç → Paylaş → Ana Ekrana Ekle → ana ekrandan aç → bu butona bas. Safari sekmesinden bildirim gelmeyebilir.</p></div></div></div>
+        <div class="card"><div class="card-title">Varyant API Kontrolü</div><pre id="ikasVariantDebugOut" class="debug-box">Henüz kontrol edilmedi.</pre></div><div id="page-notifications" class="page"><div class="page-head"><div><div class="page-title">Bildirimler</div><div class="page-sub">Telefona canlı destek bildirimi gelsin diye bu cihazı kaydet.</div></div></div><div class="module-grid"><div class="module" style="align-items:flex-start;text-align:left"><div class="module-ico">🔔</div><h3>Telefon Bildirimleri</h3><p id="pushStatusText">Bildirim durumu kontrol ediliyor...</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button id="pushSetupBtn" class="btn gold" type="button">Bu Telefonda Bildirimi Aç</button><button id="pushTestBtn" class="btn ghost" type="button">Test Bildirimi Gönder</button></div><p class="page-sub" style="margin-top:12px">iPhone kullanıyorsan: Safari’de paneli aç → Paylaş → Ana Ekrana Ekle → ana ekrandan aç → bu butona bas. Safari sekmesinden bildirim gelmeyebilir.</p></div></div></div>
         <div id="page-products" class="page"><div class="page-title">Ürünler</div><p class="page-sub">ikas ürün listesi bağlanınca burada görünecek.</p></div>
         <div id="page-reports" class="page"><div class="page-title">Raporlar</div><p class="page-sub">Satış ve destek raporları burada hazırlanacak.</p></div>
         <div id="page-settings" class="page"><div class="page-title">Ayarlar</div><p class="page-sub">Panel ayarları burada olacak.</p></div>
@@ -5916,6 +5938,17 @@ function renderExchangeNotes(){
     Array.prototype.slice.call(menu.querySelectorAll('.exchange-product-choice')).forEach(function(btn){
       var name=String(btn.getAttribute('data-product-name')||btn.textContent||'').toLowerCase();
       btn.style.display=!term||name.indexOf(term)>=0?'grid':'none';
+    });
+  });
+  on('ikasVariantDebugBtn','click',function(){
+    var out=$('ikasVariantDebugOut');
+    if(out)out.textContent='Kontrol ediliyor...';
+    api('/api/admin/ikas/variant-debug').then(function(d){
+      if(out)out.textContent=JSON.stringify(d,null,2);
+      toast('Varyant alanları kontrol edildi');
+    }).catch(function(err){
+      if(out)out.textContent='Hata: '+(err&&err.message?err.message:err);
+      toast('Varyant kontrolü hata verdi');
     });
   });
   on('pushBtn','click',subscribePush); on('pushSetupBtn','click',subscribePush); on('pushTestBtn','click',sendTestPush);
