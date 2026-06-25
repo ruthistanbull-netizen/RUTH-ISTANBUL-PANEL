@@ -3451,6 +3451,94 @@ function adminHtml(serverAdmin) {
   100%{content:""}
 }
 
+
+
+/* Topbar ikas status badge */
+.top-ikas-status{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  min-height:34px;
+  padding:7px 11px;
+  border:1px solid rgba(216,182,111,.24);
+  border-radius:999px;
+  background:rgba(255,255,255,.025);
+  color:var(--muted);
+  font-size:11px;
+  font-weight:760;
+  letter-spacing:.01em;
+  white-space:nowrap;
+  transition:border-color .18s ease,background .18s ease,color .18s ease,box-shadow .18s ease;
+}
+.top-ikas-status b{
+  color:var(--text-2);
+  font-weight:820;
+}
+.top-ikas-dot{
+  width:8px;
+  height:8px;
+  border-radius:50%;
+  background:#f0c66b;
+  box-shadow:0 0 0 3px rgba(240,198,107,.10);
+  flex:0 0 auto;
+}
+.top-ikas-status.ikas-connecting{
+  border-color:rgba(240,198,107,.34);
+  color:#f0c66b;
+}
+.top-ikas-status.ikas-connecting .top-ikas-dot{
+  background:#f0c66b;
+  animation:ikasPulse 1.1s ease-in-out infinite;
+}
+.top-ikas-status.ikas-connected{
+  border-color:rgba(119,204,146,.34);
+  background:rgba(119,204,146,.055);
+}
+.top-ikas-status.ikas-connected b{
+  color:#77cc92;
+}
+.top-ikas-status.ikas-connected .top-ikas-dot{
+  background:#77cc92;
+  box-shadow:0 0 0 3px rgba(119,204,146,.10);
+}
+.top-ikas-status.ikas-failed{
+  border-color:rgba(255,138,122,.34);
+  background:rgba(255,100,90,.045);
+}
+.top-ikas-status.ikas-failed b{
+  color:#ff8a7a;
+}
+.top-ikas-status.ikas-failed .top-ikas-dot{
+  background:#ff8a7a;
+  box-shadow:0 0 0 3px rgba(255,100,90,.10);
+}
+@keyframes ikasPulse{
+  0%,100%{transform:scale(1);opacity:.72}
+  50%{transform:scale(1.35);opacity:1}
+}
+@media(max-width:820px){
+  .top-ikas-status{
+    order:-1;
+    min-height:30px;
+    padding:6px 9px;
+    gap:6px;
+    font-size:10.5px;
+  }
+  .top-ikas-status span:nth-child(2){
+    display:none;
+  }
+}
+@media(max-width:430px){
+  .top-ikas-status{
+    padding:6px 8px;
+  }
+  .top-ikas-status b{
+    max-width:88px;
+    overflow:hidden;
+    text-overflow:ellipsis;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -3552,7 +3640,7 @@ function adminHtml(serverAdmin) {
     <main class="main">
       <header class="topbar">
         <div class="top-left"><button id="mobileMenuBtn" class="icon-btn unified-menu-btn">☰</button><div class="crumb-title" id="crumbTitle">Genel Bakış</div></div>
-        <div class="top-actions"><button class="top-icon" title="Ara">⌕</button><button id="pushBtn" class="top-icon" title="Bildirimleri aç">♧<span id="topBadge" class="top-dot">0</span></button><div class="profile"><div class="avatar" title="Ruth Istanbul"><img class="ruth-logo-img ruth-avatar-img" src="/ruth-gold-r-logo.png" alt="Ruth Istanbul"></div><div class="profile-copy"><div id="profileName" class="profile-name">Yönetici</div><div class="profile-role">Yönetici</div></div></div></div>
+        <div class="top-actions"><div id="topIkasStatus" class="top-ikas-status ikas-connecting"><span class="top-ikas-dot"></span><span>ikas</span><b id="topIkasStatusText">Bağlanıyor</b></div><button class="top-icon" title="Ara">⌕</button><button id="pushBtn" class="top-icon" title="Bildirimleri aç">♧<span id="topBadge" class="top-dot">0</span></button><div class="profile"><div class="avatar" title="Ruth Istanbul"><img class="ruth-logo-img ruth-avatar-img" src="/ruth-gold-r-logo.png" alt="Ruth Istanbul"></div><div class="profile-copy"><div id="profileName" class="profile-name">Yönetici</div><div class="profile-role">Yönetici</div></div></div></div>
       </header>
       <section class="content">
         <div id="page-overview" class="page active">
@@ -3766,11 +3854,18 @@ function adminHtml(serverAdmin) {
   }
   function setIkasStatusText(value){
     setText('ikasStatus', value);
+    setText('topIkasStatusText', value);
     var el=$('ikasStatus');
     if(el){
       el.classList.toggle('ikas-connecting', value==='Bağlanıyor');
       el.classList.toggle('ikas-connected', value==='Bağlandı');
       el.classList.toggle('ikas-failed', value==='Bağlanamadı');
+    }
+    var top=$('topIkasStatus');
+    if(top){
+      top.classList.toggle('ikas-connecting', value==='Bağlanıyor');
+      top.classList.toggle('ikas-connected', value==='Bağlandı');
+      top.classList.toggle('ikas-failed', value==='Bağlanamadı');
     }
   }
   function connectIkasFast(){
