@@ -1401,6 +1401,12 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
         productId: valueOrEmpty(product.id),
         slug: "",
         variantText,
+        variantValues: Array.isArray(variant.variantValues)
+          ? variant.variantValues.map((value) => ({
+              variantTypeName: valueOrEmpty(value.variantTypeName),
+              variantValueName: valueOrEmpty(value.variantValueName)
+            })).filter((value) => value.variantValueName)
+          : [],
         sellPrice: Number((variant.prices && variant.prices.sellPrice) || 0),
         discountPrice: Number((variant.prices && variant.prices.discountPrice) || 0),
         stock: stockFromStocks,
@@ -4759,6 +4765,63 @@ function adminHtml(serverAdmin) {
   border-color:rgba(216,182,111,.55) !important;
 }
 
+
+
+/* V95: product search + grouped ikas variants */
+.exchange-product-search{
+  width:100% !important;
+  margin-bottom:8px !important;
+  min-height:40px !important;
+}
+.exchange-variant-title{
+  font-size:11px;
+  color:var(--muted);
+  font-weight:800;
+  letter-spacing:.06em;
+  text-transform:uppercase;
+}
+.exchange-variant-groups{
+  display:grid;
+  gap:8px;
+}
+.exchange-variant-field{
+  display:grid;
+  gap:6px;
+}
+.exchange-variant-field label{
+  font-size:12px;
+  color:#d8b66f;
+  font-weight:780;
+}
+.exchange-variant-placeholder{
+  border:1px solid var(--line);
+  background:rgba(255,255,255,.025);
+  color:var(--muted);
+  border-radius:12px;
+  padding:11px 12px;
+  min-height:44px;
+  display:flex;
+  align-items:center;
+}
+.exchange-variant-group-select,
+.exchange-variant-single-select{
+  width:100% !important;
+  min-height:44px !important;
+}
+@media(max-width:820px){
+  #page-exchange .exchange-product-search{
+    min-height:44px !important;
+    font-size:15px !important;
+  }
+  #page-exchange .exchange-variant-field label{
+    font-size:13px !important;
+  }
+  #page-exchange .exchange-variant-group-select,
+  #page-exchange .exchange-variant-single-select{
+    min-height:48px !important;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -5335,24 +5398,11 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
       var variantText=variants.length>1?(variants.length+' varyant'):'Tek varyant';
       return '<button type="button" class="exchange-product-choice '+(String(draft.productId||draft.productName||'')===String(p.id||p.name||'')?'selected':'')+'" data-product-id="'+escapeHtml(p.id||p.name||'')+'" data-product-name="'+escapeHtml(p.name||'Ürün')+'" data-product-image="'+escapeHtml(p.image||'')+'">'+imgHtml(p.image,'')+'<span><b>'+escapeHtml(p.name||'Ürün')+'</b><small>'+escapeHtml(variantText+' • '+priceText)+'</small></span></button>';
     }).join('');
-
-    var variantOptions='<option value="">Önce ürün seç</option>';
-    var variantDisabled='disabled';
+    var variantUi='<div class="exchange-variant-placeholder">Önce ürün seç</div>';
     if(selectedProduct){
-      var variants=(selectedProduct.variants&&selectedProduct.variants.length)?selectedProduct.variants:[{}];
-      variantOptions=variants.map(function(v,idx){
-        var variantText=cleanVariantText(selectedProduct.name||'',v.variantText||v.name||'',idx);
-        var sku=v.sku||'';
-        var price=variantPrice(v,selectedProduct)||orderLinePriceFallback(selectedProduct.name||'',variantText);
-        var label=[variantText,price?money(price):'Fiyat yok'].filter(Boolean).join(' • ');
-        var value=String(v.id||idx);
-        var isSelected=String(draft.variantId||'')===String(v.id||'') || (!draft.variantId && idx===0);
-        return '<option value="'+escapeHtml(value)+'" data-variant-id="'+escapeHtml(v.id||'')+'" data-variant-text="'+escapeHtml(variantText||'')+'" data-sku="'+escapeHtml(sku||'')+'" data-price="'+escapeHtml(price||0)+'" '+(isSelected?'selected':'')+'>'+escapeHtml(label)+'</option>';
-      }).join('');
-      variantDisabled='';
+      variantUi=variantGroupsHtml(selectedProduct,draft);
     }
-
-    return '<div class="exchange-pick-wrap" data-draft-key="'+escapeHtml(draftKey||'')+'"><div class="exchange-product-picker"><input type="hidden" class="exchange-product-value" value="'+escapeHtml(draft.productId||'')+'"><input type="hidden" class="exchange-product-name" value="'+escapeHtml(draft.productName||'')+'"><button type="button" class="exchange-product-trigger">'+imgHtml(selectedImage, '')+'<span class="pick-copy"><b>'+escapeHtml(triggerTitle)+'</b><small>'+escapeHtml(triggerSmall)+'</small></span><span>⌄</span></button><div class="exchange-product-menu">'+(choices||'<div class="empty">Ürün verisi yok. Önce ikas senkronize et.</div>')+'</div></div><div class="exchange-variant-box"><label>Varyant</label><select class="input exchange-variant-select" '+variantDisabled+'>'+variantOptions+'</select><input type="hidden" class="exchange-variant-value" value="'+escapeHtml(draft.variantId||'')+'"><input type="hidden" class="exchange-variant-text" value="'+escapeHtml(draft.variantText||'')+'"><input type="hidden" class="exchange-product-sku" value="'+escapeHtml(draft.sku||'')+'"><input type="hidden" class="exchange-product-price" value="'+escapeHtml(draft.price||0)+'"></div></div>';
+    return '<div class="exchange-pick-wrap" data-draft-key="'+escapeHtml(draftKey||'')+'"><div class="exchange-product-picker"><input type="hidden" class="exchange-product-value" value="'+escapeHtml(draft.productId||'')+'"><input type="hidden" class="exchange-product-name" value="'+escapeHtml(draft.productName||'')+'"><button type="button" class="exchange-product-trigger">'+imgHtml(selectedImage, '')+'<span class="pick-copy"><b>'+escapeHtml(triggerTitle)+'</b><small>'+escapeHtml(triggerSmall)+'</small></span><span>⌄</span></button><div class="exchange-product-menu"><input type="search" class="input exchange-product-search" placeholder="Ürün ara...">'+(choices||'<div class="empty">Ürün verisi yok. Önce ikas senkronize et.</div>')+'</div></div><div class="exchange-variant-box"><div class="exchange-variant-title">Varyant</div><div class="exchange-variant-groups">'+variantUi+'</div><input type="hidden" class="exchange-variant-value" value="'+escapeHtml(draft.variantId||'')+'"><input type="hidden" class="exchange-variant-text" value="'+escapeHtml(draft.variantText||'')+'"><input type="hidden" class="exchange-product-sku" value="'+escapeHtml(draft.sku||'')+'"><input type="hidden" class="exchange-product-price" value="'+escapeHtml(draft.price||0)+'"></div></div>';
   }
   function exchangeOrderCard(o){
     var rec=orderExchangeRecord(o);
@@ -5459,30 +5509,104 @@ function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFrac
     return (ikasSummary.products||[]).find(function(p){return String(p.id||p.name||'')===String(productId)}) ||
       (ikasSummary.products||[]).find(function(p){return String(p.name||'')===String(productName)}) || null;
   }
-  function selectExchangeVariant(select){
-    if(!select)return;
-    var wrap=select.closest('.exchange-pick-wrap');
+  function variantValuePairs(v){
+    return (v&&Array.isArray(v.variantValues)?v.variantValues:[]).map(function(x){
+      return {type:String(x.variantTypeName||'Seçenek').trim()||'Seçenek', value:String(x.variantValueName||'').trim()};
+    }).filter(function(x){return x.value});
+  }
+  function variantGroups(product){
+    var map={};
+    var order=[];
+    (product&&product.variants||[]).forEach(function(v){
+      variantValuePairs(v).forEach(function(pair){
+        if(!map[pair.type]){map[pair.type]=[]; order.push(pair.type);}
+        if(map[pair.type].indexOf(pair.value)<0)map[pair.type].push(pair.value);
+      });
+    });
+    return order.map(function(type){return {type:type, values:map[type]||[]};}).filter(function(g){return g.values.length});
+  }
+  function variantMatchesSelections(v,selections){
+    var pairs=variantValuePairs(v);
+    return Object.keys(selections||{}).every(function(type){
+      if(!selections[type])return true;
+      return pairs.some(function(pair){return pair.type===type && pair.value===selections[type];});
+    });
+  }
+  function currentVariantSelections(wrap){
+    var out={};
+    if(!wrap)return out;
+    Array.prototype.slice.call(wrap.querySelectorAll('.exchange-variant-group-select')).forEach(function(sel){
+      var type=sel.getAttribute('data-variant-type')||'';
+      if(type)out[type]=sel.value||'';
+    });
+    return out;
+  }
+  function variantLabel(product,v,idx){
+    var pairs=variantValuePairs(v);
+    if(pairs.length)return pairs.map(function(p){return p.type+': '+p.value}).join(' / ');
+    return cleanVariantText(product&&product.name||'',v&&((v.variantText)||v.name)||'',idx||0);
+  }
+  function findVariantBySelections(product,selections){
+    var variants=(product&&product.variants&&product.variants.length)?product.variants:[{}];
+    return variants.find(function(v){return variantMatchesSelections(v,selections);})||variants[0]||{};
+  }
+  function variantGroupsHtml(product,draft){
+    var groups=variantGroups(product);
+    var variants=(product&&product.variants&&product.variants.length)?product.variants:[{}];
+    var draftSelections=draft&&draft.variantSelections||{};
+    if(groups.length){
+      return groups.map(function(group){
+        var value=draftSelections[group.type]||group.values[0]||'';
+        return '<div class="exchange-variant-field"><label>'+escapeHtml(group.type)+'</label><select class="input exchange-variant-group-select" data-variant-type="'+escapeHtml(group.type)+'">'+group.values.map(function(v){return '<option value="'+escapeHtml(v)+'" '+(v===value?'selected':'')+'>'+escapeHtml(v)+'</option>';}).join('')+'</select></div>';
+      }).join('');
+    }
+    return '<div class="exchange-variant-field"><label>Varyant</label><select class="input exchange-variant-single-select">'+variants.map(function(v,idx){
+      var vt=cleanVariantText(product&&product.name||'',v.variantText||v.name||'',idx);
+      var price=variantPrice(v,product)||orderLinePriceFallback(product&&product.name||'',vt);
+      var label=[vt,price?money(price):'Fiyat yok'].filter(Boolean).join(' • ');
+      var selected=String(draft&&draft.variantId||'')===String(v.id||'') || (!(draft&&draft.variantId) && idx===0);
+      return '<option value="'+escapeHtml(v.id||idx)+'" data-variant-id="'+escapeHtml(v.id||'')+'" data-variant-text="'+escapeHtml(vt||'')+'" data-sku="'+escapeHtml(v.sku||'')+'" data-price="'+escapeHtml(price||0)+'" '+(selected?'selected':'')+'>'+escapeHtml(label)+'</option>';
+    }).join('')+'</select></div>';
+  }
+  function applyExchangeVariant(wrap, product, variant, selections){
     if(!wrap)return;
     var variantIdInput=wrap.querySelector('.exchange-variant-value');
     var variantTextInput=wrap.querySelector('.exchange-variant-text');
     var skuInput=wrap.querySelector('.exchange-product-sku');
     var priceInput=wrap.querySelector('.exchange-product-price');
-    var opt=select.options[select.selectedIndex];
-    var variantId=opt?opt.getAttribute('data-variant-id')||'':'';
-    var variantText=opt?opt.getAttribute('data-variant-text')||'':'';
-    var sku=opt?opt.getAttribute('data-sku')||'':'';
-    var price=opt?Number(opt.getAttribute('data-price')||0):0;
+    var variants=(product&&product.variants&&product.variants.length)?product.variants:[variant||{}];
+    var idx=Math.max(0,variants.indexOf(variant));
+    var variantText=variantLabel(product,variant,idx);
+    var price=variantPrice(variant,product)||orderLinePriceFallback(product&&product.name||'',variantText);
+    var sku=variant&&variant.sku||'';
+    var variantId=variant&&variant.id||'';
     if(variantIdInput)variantIdInput.value=variantId;
     if(variantTextInput)variantTextInput.value=variantText;
     if(skuInput)skuInput.value=sku;
     if(priceInput)priceInput.value=price||0;
-    saveExchangeDraft(wrap,{variantId:variantId,variantText:variantText,sku:sku,price:price});
+    saveExchangeDraft(wrap,{variantId:variantId,variantText:variantText,sku:sku,price:price,variantSelections:selections||currentVariantSelections(wrap)});
     var trig=wrap.querySelector('.exchange-product-trigger');
     var productName=wrap.querySelector('.exchange-product-name')?wrap.querySelector('.exchange-product-name').value:'Ürün';
     var img=trig&&trig.querySelector('.prod-img')?trig.querySelector('.prod-img').outerHTML:imgHtml('', '');
     var small=[variantText,price?money(price):'Fiyat yok'].filter(Boolean).join(' • ');
     if(trig)trig.innerHTML=img+'<span class="pick-copy"><b>'+escapeHtml(productName||'Ürün seç')+'</b><small>'+escapeHtml(small||'Varyant seç')+'</small></span><span>✓</span>';
     updateExchangePriceDiff(wrap);
+  }
+  function selectExchangeVariant(select){
+    if(!select)return;
+    var wrap=select.closest('.exchange-pick-wrap');
+    if(!wrap)return;
+    var product=findExchangeProduct(wrap.querySelector('.exchange-product-value')&&wrap.querySelector('.exchange-product-value').value||'',wrap.querySelector('.exchange-product-name')&&wrap.querySelector('.exchange-product-name').value||'');
+    if(!product)return;
+    if(select.classList.contains('exchange-variant-single-select') || select.classList.contains('exchange-variant-select')){
+      var opt=select.options[select.selectedIndex];
+      var variantId=opt?opt.getAttribute('data-variant-id')||'':'';
+      var variant=(product.variants||[]).find(function(v){return String(v.id||'')===String(variantId)})||(product.variants||[])[select.selectedIndex]||{};
+      return applyExchangeVariant(wrap,product,variant,{});
+    }
+    var selections=currentVariantSelections(wrap);
+    var variant=findVariantBySelections(product,selections);
+    applyExchangeVariant(wrap,product,variant,selections);
   }
   function saveExchangeDraft(wrap, patch){
     if(!wrap)return;
@@ -5491,23 +5615,16 @@ function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFrac
     exchangeDrafts[key]=Object.assign({},exchangeDrafts[key]||{},patch||{});
   }
   function populateExchangeVariants(wrap, product, keepVariantId){
-    var select=wrap&&wrap.querySelector?wrap.querySelector('.exchange-variant-select'):null;
-    if(!select)return;
-    var variants=(product&&product.variants&&product.variants.length)?product.variants:[{}];
-    var options=variants.map(function(v,idx){
-      var variantText=cleanVariantText(product&&product.name||'',v.variantText||v.name||'',idx);
-      var sku=v.sku||'';
-      var price=variantPrice(v,product)||orderLinePriceFallback(product&&product.name||'',variantText);
-      var label=[variantText,price?money(price):'Fiyat yok'].filter(Boolean).join(' • ');
-      var selected=keepVariantId && String(keepVariantId)===String(v.id||'') ? 'selected' : '';
-      return '<option value="'+escapeHtml(v.id||idx)+'" data-variant-id="'+escapeHtml(v.id||'')+'" data-variant-text="'+escapeHtml(variantText||'')+'" data-sku="'+escapeHtml(sku||'')+'" data-price="'+escapeHtml(price||0)+'" '+selected+'>'+escapeHtml(label)+'</option>';
-    }).join('');
-    select.innerHTML=options||'<option value="">Varyant yok</option>';
-    select.disabled=false;
-    if(keepVariantId && !select.value && select.options.length)select.selectedIndex=0;
-    selectExchangeVariant(select);
+    var box=wrap&&wrap.querySelector?wrap.querySelector('.exchange-variant-groups'):null;
+    if(!box)return;
+    var draftKey=wrap.getAttribute('data-draft-key')||'';
+    var draft=exchangeDrafts[draftKey]||{};
+    if(keepVariantId)draft.variantId=keepVariantId;
+    box.innerHTML=product?variantGroupsHtml(product,draft):'<div class="exchange-variant-placeholder">Önce ürün seç</div>';
+    var first=box.querySelector('.exchange-variant-group-select,.exchange-variant-single-select,.exchange-variant-select');
+    if(first)selectExchangeVariant(first);
   }
-    function updateExchangePriceDiff(picker){
+  function updateExchangePriceDiff(picker){
     if(!picker)return;
     var wrap=picker.closest&&picker.closest('.exchange-pick-wrap')?picker.closest('.exchange-pick-wrap'):picker;
     var line=wrap.closest('.exchange-line');
@@ -5771,15 +5888,11 @@ function renderExchangeNotes(){
       var productName=choice.getAttribute('data-product-name')||choice.textContent.trim();
       if(val)val.value=productId||productName;
       if(name)name.value=productName;
-      saveExchangeDraft(wrap,{productId:productId||productName,productName:productName,image:image,variantId:'',variantText:'',sku:'',price:0});
+      saveExchangeDraft(wrap,{productId:productId||productName,productName:productName,image:image,variantId:'',variantText:'',sku:'',price:0,variantSelections:{}});
       var product=findExchangeProduct(productId,productName);
       populateExchangeVariants(wrap,product,'');
-      var select=wrap.querySelector('.exchange-variant-select');
-      var opt=select&&select.options[select.selectedIndex];
-      var variantText=opt?opt.getAttribute('data-variant-text')||'':'';
-      var sku=opt?opt.getAttribute('data-sku')||'':'';
-      var price=opt?Number(opt.getAttribute('data-price')||0):0;
-      var small=[variantText,price?money(price):'Varyant seç'].filter(Boolean).join(' • ');
+      var draft=exchangeDrafts[wrap.getAttribute('data-draft-key')||'']||{};
+      var small=[draft.variantText,draft.price?money(draft.price):'Varyant seç'].filter(Boolean).join(' • ');
       if(trig)trig.innerHTML=imgHtml(image,'')+'<span class="pick-copy"><b>'+escapeHtml(productName)+'</b><small>'+escapeHtml(small)+'</small></span><span>✓</span>';
       picker.classList.remove('open');
       updateExchangePriceDiff(wrap);
@@ -5791,9 +5904,19 @@ function renderExchangeNotes(){
   });
 
   document.addEventListener('change',function(e){
-    var select=e.target&&e.target.closest?e.target.closest('.exchange-variant-select'):null;
+    var select=e.target&&e.target.closest?e.target.closest('.exchange-variant-group-select,.exchange-variant-single-select,.exchange-variant-select'):null;
     if(!select)return;
     selectExchangeVariant(select);
+  });
+  document.addEventListener('input',function(e){
+    var search=e.target&&e.target.closest?e.target.closest('.exchange-product-search'):null;
+    if(!search)return;
+    var menu=search.closest('.exchange-product-menu');
+    var term=String(search.value||'').toLowerCase();
+    Array.prototype.slice.call(menu.querySelectorAll('.exchange-product-choice')).forEach(function(btn){
+      var name=String(btn.getAttribute('data-product-name')||btn.textContent||'').toLowerCase();
+      btn.style.display=!term||name.indexOf(term)>=0?'grid':'none';
+    });
   });
   on('pushBtn','click',subscribePush); on('pushSetupBtn','click',subscribePush); on('pushTestBtn','click',sendTestPush);
   function refreshPushStatus(){var el=$('pushStatusText'); if(!el)return; var permission=(typeof Notification!=='undefined'?Notification.permission:'unsupported'); api('/api/admin/push/status').then(function(s){var text='Sunucu: '+(s.pushReady?'hazır':'hazır değil')+' • Kayıtlı cihaz: '+(s.subscriptionCount||0)+' • Bu cihaz izni: '+permission; if(!s.pushReady)text+=' • Render env içinde VAPID_PUBLIC_KEY ve VAPID_PRIVATE_KEY lazım.'; if(s.error)text+=' • Kayıt tablosu hatası: '+s.error; el.textContent=text;}).catch(function(){el.textContent='Bildirim durumu alınamadı.'})}
