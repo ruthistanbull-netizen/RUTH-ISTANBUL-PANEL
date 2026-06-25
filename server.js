@@ -3662,7 +3662,6 @@ function adminHtml(serverAdmin) {
   padding:13px;
   backdrop-filter:blur(16px);
 }
-.crm-customer-card:hover .crm-popover,
 .crm-customer-card.open .crm-popover{
   opacity:1;
   pointer-events:auto;
@@ -3743,6 +3742,137 @@ function adminHtml(serverAdmin) {
   }
   .exchange-reminder{
     grid-template-columns:1fr;
+  }
+}
+
+
+
+/* CRM müşteri bilgisi sadece tıklayınca açılır */
+.crm-customer-card .crm-popover{
+  pointer-events:none;
+}
+.crm-customer-card.open .crm-popover{
+  pointer-events:auto;
+}
+
+/* Siparişler sayfasında Değişim Yap ve Senkronize butonları aynı boy */
+#page-orders .head-tools .btn.gold,
+#page-ikas-orders .head-tools .btn.gold{
+  width:198px !important;
+  min-width:198px !important;
+  max-width:198px !important;
+  justify-content:center !important;
+  padding-left:12px !important;
+  padding-right:12px !important;
+}
+@media(max-width:820px){
+  #page-orders .head-tools .btn.gold,
+  #page-ikas-orders .head-tools .btn.gold{
+    width:100% !important;
+    min-width:0 !important;
+    max-width:none !important;
+  }
+}
+
+
+
+/* Exchange product image picker */
+.exchange-product-picker{
+  position:relative;
+  min-width:0;
+}
+.exchange-product-trigger{
+  width:100%;
+  min-height:58px;
+  display:grid;
+  grid-template-columns:44px minmax(0,1fr) auto;
+  align-items:center;
+  gap:10px;
+  border:1px solid rgba(216,182,111,.28);
+  border-radius:12px;
+  background:rgba(255,255,255,.025);
+  color:var(--text);
+  padding:7px 10px;
+  text-align:left;
+  cursor:pointer;
+}
+.exchange-product-trigger .prod-img{
+  width:44px;
+  height:44px;
+}
+.pick-copy{
+  min-width:0;
+  display:grid;
+  gap:2px;
+}
+.pick-copy b,
+.exchange-product-choice b{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  display:block;
+}
+.pick-copy small,
+.exchange-product-choice small{
+  color:var(--muted);
+  font-size:11px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  display:block;
+}
+.exchange-product-menu{
+  position:absolute;
+  left:0;
+  right:0;
+  top:calc(100% + 8px);
+  z-index:50;
+  display:none;
+  max-height:330px;
+  overflow:auto;
+  border:1px solid rgba(216,182,111,.30);
+  border-radius:14px;
+  background:rgba(8,9,11,.98);
+  box-shadow:0 22px 64px rgba(0,0,0,.46);
+  padding:8px;
+  backdrop-filter:blur(16px);
+}
+.exchange-product-picker.open .exchange-product-menu{
+  display:block;
+}
+.exchange-product-choice{
+  width:100%;
+  display:grid;
+  grid-template-columns:48px minmax(0,1fr);
+  gap:10px;
+  align-items:center;
+  border:0;
+  border-radius:12px;
+  background:transparent;
+  color:var(--text);
+  padding:8px;
+  text-align:left;
+  cursor:pointer;
+}
+.exchange-product-choice:hover{
+  background:rgba(216,182,111,.08);
+}
+.exchange-product-choice .prod-img{
+  width:48px;
+  height:48px;
+}
+@media(max-width:820px){
+  #page-exchange .exchange-layout .panel:nth-child(2){
+    order:-1;
+  }
+  #page-exchange .exchange-layout .panel:nth-child(1){
+    order:2;
+  }
+  .exchange-product-menu{
+    position:relative;
+    top:auto;
+    margin-top:8px;
+    max-height:300px;
   }
 }
 
@@ -4249,6 +4379,15 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     qsa('#ikasCustomers .ikas-customer-card').forEach(function(card){card.addEventListener('click',function(e){if(e.target&&e.target.closest&&e.target.closest('.exchange-customer-btn'))return; var key=card.getAttribute('data-customer-key'); expandedIkasCustomerKey=expandedIkasCustomerKey===key?'':key; renderIkasCustomers();});});
     qsa('#ikasCustomers .exchange-customer-btn').forEach(function(btn){btn.addEventListener('click',function(e){e.stopPropagation(); selectedExchangeCustomerKey=btn.getAttribute('data-customer-key')||''; setRoute('exchange',true); renderExchange();});});
   }
+
+  document.addEventListener('click',function(e){
+    if(!e.target.closest || e.target.closest('#ikasCustomers'))return;
+    if(expandedIkasCustomerKey){
+      expandedIkasCustomerKey='';
+      renderIkasCustomers();
+    }
+  },true);
+
   function renderExchange(){
     var customers=buildIkasCustomers();
     var root=$('exchangeCustomers'); var detail=$('exchangeOrders');
@@ -4265,14 +4404,18 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     detail.innerHTML=orders.length?orders.map(exchangeOrderCard).join(''):'<div class="empty">Bu müşteride sipariş yok.</div>';
     qsa('.exchange-save').forEach(function(btn){btn.addEventListener('click',function(){saveExchangeForOrder(btn.getAttribute('data-order-id'))});});
   }
-  function productOptions(selected){
+  function productPickerHtml(){
     var products=ikasSummary.products||[];
-    return '<option value="">Yeni ürün seç</option>'+products.map(function(p){return '<option value="'+escapeHtml(p.id||p.name)+'" data-name="'+escapeHtml(p.name||'Ürün')+'" '+(selected===String(p.id||p.name)?'selected':'')+'>'+escapeHtml(p.name||'Ürün')+'</option>'}).join('');
+    var choices=products.map(function(p){
+      var sku=(p.variants||[])[0]&&((p.variants||[])[0].sku||'');
+      return '<button type="button" class="exchange-product-choice" data-product-id="'+escapeHtml(p.id||p.name||'')+'" data-product-name="'+escapeHtml(p.name||'Ürün')+'" data-product-sku="'+escapeHtml(sku||'')+'" data-product-image="'+escapeHtml(p.image||'')+'">'+imgHtml(p.image,'')+'<span><b>'+escapeHtml(p.name||'Ürün')+'</b><small>'+escapeHtml(sku?('SKU: '+sku):'Ürün fotoğrafıyla seç')+'</small></span></button>';
+    }).join('');
+    return '<div class="exchange-product-picker"><input type="hidden" class="exchange-product-value"><input type="hidden" class="exchange-product-name"><input type="hidden" class="exchange-product-sku"><button type="button" class="exchange-product-trigger">'+imgHtml('', '')+'<span class="pick-copy"><b>Yeni ürün seç</b><small>Fotoğrafıyla görmek için tıkla</small></span><span>⌄</span></button><div class="exchange-product-menu">'+(choices||'<div class="empty">Ürün verisi yok. Önce ikas senkronize et.</div>')+'</div></div>';
   }
   function exchangeOrderCard(o){
     var rec=orderExchangeRecord(o);
     var lines=(o.items||[]).map(function(i,idx){
-      return '<div class="exchange-line" data-line-id="'+escapeHtml(i.id||idx)+'">'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+'× '+Number(i.quantity||0)+'</div></div><select class="input exchange-product-select">'+productOptions('')+'</select></div>';
+      return '<div class="exchange-line" data-line-id="'+escapeHtml(i.id||idx)+'">'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+'× '+Number(i.quantity||0)+'</div></div>'+productPickerHtml()+'</div>';
     }).join('');
     return '<div class="exchange-order-card" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+' — '+escapeHtml(o.customer||'')+(rec?'<span class="exchange-chip">Değişim yapıldı</span>':'')+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.packageStatus||o.status||'')+'</div></div><span class="badge '+(rec?'exchange-done':'')+'">'+(rec?'Değişim yapıldı':escapeHtml(o.packageStatus||o.status||'Yeni'))+'</span></div>'+lines+'<div class="exchange-reminder"><div class="field"><label>Değişim hatırlatma zamanı</label><input class="input exchange-reminder-at" type="datetime-local" value="'+escapeHtml(rec&&rec.reminderAt?String(rec.reminderAt).slice(0,16):'')+'"></div><button class="btn gold exchange-save" data-order-id="'+escapeHtml(o.id)+'">Değişimi Kaydet</button></div></div>';
   }
@@ -4283,10 +4426,13 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     var card=null; qsa('.exchange-order-card').forEach(function(x){if(String(x.getAttribute('data-order-id'))===String(orderId))card=x}); if(!card)return;
     var changes=[];
     Array.prototype.slice.call(card.querySelectorAll('.exchange-line')).forEach(function(line){
-      var sel=line.querySelector('.exchange-product-select'); if(!sel||!sel.value)return;
+      var val=line.querySelector('.exchange-product-value');
+      var name=line.querySelector('.exchange-product-name');
+      var sku=line.querySelector('.exchange-product-sku');
+      if(!val||!val.value)return;
       var lineId=line.getAttribute('data-line-id')||'';
       var item=(o.items||[]).find(function(i,idx){return String(i.id||idx)===String(lineId)})||{};
-      changes.push({lineId:lineId,fromName:item.name||'Ürün',fromSku:item.sku||'',quantity:Number(item.quantity||0),toProductId:sel.value,toProductName:sel.options[sel.selectedIndex]?sel.options[sel.selectedIndex].textContent:''});
+      changes.push({lineId:lineId,fromName:item.name||'Ürün',fromSku:item.sku||'',quantity:Number(item.quantity||0),toProductId:val.value,toProductName:name&&name.value?name.value:val.value,toSku:sku&&sku.value?sku.value:''});
     });
     if(!changes.length){toast('Değiştirilecek ürün seç.');return;}
     var reminder=card.querySelector('.exchange-reminder-at');
@@ -4407,6 +4553,40 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
   document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('[data-page-target]'); if(!b)return; var page=Number(b.getAttribute('data-page')||1); var target=b.getAttribute('data-page-target'); if(target==='orders')ordersPage=page; if(target==='allOrders')allOrdersPage=page; if(target==='deliveredOrders')deliveredOrdersPage=page; renderIkas();});
   if($('syncOrders'))$('syncOrders').addEventListener('click',function(){loadIkasSummary(false,true).then(function(){toast('ikas verisi yenilendi')})}); if($('quickSync'))$('quickSync').addEventListener('click',function(){setRoute('ikas-orders',true);loadIkasSummary(false,true).then(function(){toast('ikas verisi yenilendi')})}); qsa('.ikas-refresh').forEach(function(btn){btn.addEventListener('click',function(){loadIkasSummary(false,true).then(function(){toast('ikas verisi yenilendi')})})});
   on('refreshSupport','click',function(){loadConversations(false)}); on('refreshCrm','click',function(){loadConversations(false);loadIkasSummary(false,false);loadExchangeRecords()}); on('searchInput','input',renderConversations); on('crmSearch','input',renderCustomers); on('ikasCustomerSearch','input',renderIkasCustomers); on('exchangeSearch','input',renderExchange);
+
+  document.addEventListener('click',function(e){
+    var trigger=e.target.closest&&e.target.closest('.exchange-product-trigger');
+    if(trigger){
+      e.preventDefault();
+      var picker=trigger.closest('.exchange-product-picker');
+      qsa('.exchange-product-picker.open').forEach(function(x){if(x!==picker)x.classList.remove('open')});
+      picker.classList.toggle('open');
+      return;
+    }
+    var choice=e.target.closest&&e.target.closest('.exchange-product-choice');
+    if(choice){
+      e.preventDefault();
+      var picker=choice.closest('.exchange-product-picker');
+      if(!picker)return;
+      var val=picker.querySelector('.exchange-product-value');
+      var name=picker.querySelector('.exchange-product-name');
+      var sku=picker.querySelector('.exchange-product-sku');
+      var trig=picker.querySelector('.exchange-product-trigger');
+      var image=choice.getAttribute('data-product-image')||'';
+      var productName=choice.getAttribute('data-product-name')||choice.textContent.trim();
+      var productSku=choice.getAttribute('data-product-sku')||'';
+      if(val)val.value=choice.getAttribute('data-product-id')||productName;
+      if(name)name.value=productName;
+      if(sku)sku.value=productSku;
+      if(trig)trig.innerHTML=imgHtml(image,'')+'<span class="pick-copy"><b>'+escapeHtml(productName)+'</b><small>'+escapeHtml(productSku?('SKU: '+productSku):'Seçildi')+'</small></span><span>✓</span>';
+      picker.classList.remove('open');
+      return;
+    }
+    if(!e.target.closest || !e.target.closest('.exchange-product-picker')){
+      qsa('.exchange-product-picker.open').forEach(function(x){x.classList.remove('open')});
+    }
+  });
+
   on('pushBtn','click',subscribePush); on('pushSetupBtn','click',subscribePush); on('pushTestBtn','click',sendTestPush);
   function refreshPushStatus(){var el=$('pushStatusText'); if(!el)return; var permission=(typeof Notification!=='undefined'?Notification.permission:'unsupported'); api('/api/admin/push/status').then(function(s){var text='Sunucu: '+(s.pushReady?'hazır':'hazır değil')+' • Kayıtlı cihaz: '+(s.subscriptionCount||0)+' • Bu cihaz izni: '+permission; if(!s.pushReady)text+=' • Render env içinde VAPID_PUBLIC_KEY ve VAPID_PRIVATE_KEY lazım.'; if(s.error)text+=' • Kayıt tablosu hatası: '+s.error; el.textContent=text;}).catch(function(){el.textContent='Bildirim durumu alınamadı.'})}
   function subscribePush(){ if(!('serviceWorker' in navigator)||!('PushManager' in window)){alert('Bu tarayıcı bildirim desteklemiyor. iPhone kullanıyorsan paneli Safari ile açıp Ana Ekrana Ekle, sonra ana ekrandaki ikonla aç.');return Promise.reject(new Error('unsupported'));} if(typeof Notification==='undefined'){alert('Bu tarayıcı bildirim izni desteklemiyor.');return Promise.reject(new Error('notifications_unsupported'));} return api('/api/admin/me').then(function(me){if(!me.vapidPublicKey)throw new Error('VAPID key yok. Render Environment kısmına VAPID_PUBLIC_KEY ve VAPID_PRIVATE_KEY eklenmeli.'); return navigator.serviceWorker.register('/sw.js').then(function(reg){return navigator.serviceWorker.ready.then(function(){return reg.pushManager.getSubscription().then(function(existing){if(existing)return existing; if(Notification.permission==='denied')throw new Error('Bildirim izni engellenmiş. Telefon ayarlarından izin ver.'); var ask=Notification.permission==='granted'?Promise.resolve('granted'):Notification.requestPermission(); return ask.then(function(permission){if(permission!=='granted')throw new Error('Bildirim izni verilmedi.'); return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)});});});});});}).then(function(sub){return api('/api/admin/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub})})}).then(function(){toast('Bildirimler açıldı'); refreshPushStatus(); return sendTestPush(true);}).catch(function(err){alert('Bildirim açılamadı: '+err.message); refreshPushStatus(); throw err;})}
