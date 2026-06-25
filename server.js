@@ -3524,9 +3524,6 @@ function adminHtml(serverAdmin) {
     gap:6px;
     font-size:10.5px;
   }
-  .top-ikas-status span:nth-child(2){
-    display:none;
-  }
 }
 @media(max-width:430px){
   .top-ikas-status{
@@ -3536,6 +3533,36 @@ function adminHtml(serverAdmin) {
     max-width:88px;
     overflow:hidden;
     text-overflow:ellipsis;
+  }
+}
+
+
+
+/* Mobile ikas label visible + removed header icons spacing */
+.top-actions{
+  gap:10px !important;
+}
+.top-ikas-label{
+  display:inline !important;
+}
+@media(max-width:820px){
+  .top-actions{
+    gap:8px !important;
+  }
+  .top-ikas-status{
+    min-width:auto !important;
+    padding:6px 10px !important;
+  }
+  .top-ikas-label{
+    display:inline !important;
+  }
+}
+@media(max-width:430px){
+  .top-ikas-status{
+    max-width:170px !important;
+  }
+  .top-ikas-status b{
+    max-width:98px !important;
   }
 }
 
@@ -3640,7 +3667,7 @@ function adminHtml(serverAdmin) {
     <main class="main">
       <header class="topbar">
         <div class="top-left"><button id="mobileMenuBtn" class="icon-btn unified-menu-btn">☰</button><div class="crumb-title" id="crumbTitle">Genel Bakış</div></div>
-        <div class="top-actions"><div id="topIkasStatus" class="top-ikas-status ikas-connecting"><span class="top-ikas-dot"></span><span>ikas</span><b id="topIkasStatusText">Bağlanıyor</b></div><button class="top-icon" title="Ara">⌕</button><button id="pushBtn" class="top-icon" title="Bildirimleri aç">♧<span id="topBadge" class="top-dot">0</span></button><div class="profile"><div class="avatar" title="Ruth Istanbul"><img class="ruth-logo-img ruth-avatar-img" src="/ruth-gold-r-logo.png" alt="Ruth Istanbul"></div><div class="profile-copy"><div id="profileName" class="profile-name">Yönetici</div><div class="profile-role">Yönetici</div></div></div></div>
+        <div class="top-actions"><div id="topIkasStatus" class="top-ikas-status ikas-connecting"><span class="top-ikas-dot"></span><span class="top-ikas-label">ikas</span><b id="topIkasStatusText">Bağlanıyor</b></div><div class="profile"><div class="avatar" title="Ruth Istanbul"><img class="ruth-logo-img ruth-avatar-img" src="/ruth-gold-r-logo.png" alt="Ruth Istanbul"></div><div class="profile-copy"><div id="profileName" class="profile-name">Yönetici</div><div class="profile-role">Yönetici</div></div></div></div>
       </header>
       <section class="content">
         <div id="page-overview" class="page active">
