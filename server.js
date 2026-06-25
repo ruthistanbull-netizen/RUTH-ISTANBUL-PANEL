@@ -756,11 +756,8 @@ async function handleAdminApi(req, res, url) {
       try {
         const query = `
           query {
-            listVariantType(pagination:{limit:50,page:1}) {
-              count
-              data {
-                ${fields}
-              }
+            listVariantType {
+              ${fields}
             }
           }
         `;
@@ -834,7 +831,7 @@ async function handleAdminApi(req, res, url) {
           }
           queryType: __schema {
             queryType { fields { name } }
-            mutationType { fields { name } }
+            mutationType { fields { name args { name type { kind name ofType { kind name ofType { kind name } } } } type { kind name ofType { kind name } } } }
           }
         }
       `;
@@ -848,9 +845,8 @@ async function handleAdminApi(req, res, url) {
       ];
 
       const productSampleAttempts = [
-        await tryProductVariantSample("sample variantValueIds-id", "variantValueIds { id }"),
         await tryProductVariantSample("sample variantValueIds-relation", "variantValueIds { variantTypeId variantValueId }"),
-        await tryProductVariantSample("sample variantValueIds-names", "variantValueIds { variantTypeName variantValueName }")
+        await tryProductVariantSample("sample variantValueIds-prices", "variantValueIds { variantTypeId variantValueId } prices { sellPrice discountPrice }")
       ];
 
       function fieldNames(typeName) {
@@ -858,7 +854,9 @@ async function handleAdminApi(req, res, url) {
       }
 
       const queryFields = (((((data || {}).queryType || {}).queryType || {}).fields) || []).map((field) => field.name).filter((name) => /variant|option|value|attribute|product/i.test(name));
-      const mutationFields = (((((data || {}).queryType || {}).mutationType || {}).fields) || []).map((field) => field.name).filter((name) => /order|variant|product|note|tag|package|fulfill|return|refund/i.test(name));
+      const rawMutationFields = (((((data || {}).queryType || {}).mutationType || {}).fields) || []);
+      const mutationFields = rawMutationFields.map((field) => field.name).filter((name) => /order|variant|product|note|tag|package|fulfill|return|refund|payment/i.test(name));
+      const mutationDetails = rawMutationFields.filter((field) => /updateOrderLine|addOrderTag|saveOrderTag|generateOrderPaymentLink|refundOrderLine|cancelOrderLine|updateOrderPackageStatus/i.test(field.name || ""));
 
       return sendJson(res, {
         ok: true,
@@ -872,6 +870,7 @@ async function handleAdminApi(req, res, url) {
         priceFields: fieldNames("priceType"),
         queryFields,
         mutationFields,
+        mutationDetails,
         listVariantTypeAttempts,
         productSampleAttempts,
         raw: data
@@ -1382,15 +1381,136 @@ async function fetchIkasCategories() {
 }
 
 
+
+function normalizeIkasVariantTypeRows(input) {
+  const raw = Array.isArray(input)
+    ? input
+    : (input && Array.isArray(input.data))
+      ? input.data
+      : input
+        ? [input]
+        : [];
+
+  return raw.map((type) => {
+    const values = Array.isArray(type && type.values)
+      ? type.values.map((value) => ({
+          id: valueOrEmpty(value.id),
+          name: valueOrEmpty(value.name),
+          colorCode: valueOrEmpty(value.colorCode),
+          thumbnailImageId: valueOrEmpty(value.thumbnailImageId)
+        })).filter((value) => value.id || value.name)
+      : [];
+
+    return {
+      id: valueOrEmpty(type && type.id),
+      name: valueOrEmpty(type && type.name) || "Varyant",
+      order: Number((type && type.order) || 0),
+      selectionType: valueOrEmpty(type && type.selectionType),
+      values
+    };
+  }).filter((type) => type.id || type.name);
+}
+
+function buildIkasVariantTypeMap(types) {
+  const map = new Map();
+  (types || []).forEach((type) => {
+    const valuesById = new Map();
+    (type.values || []).forEach((value) => {
+      if (value.id) valuesById.set(String(value.id), value);
+    });
+    map.set(String(type.id), { ...type, valuesById });
+  });
+  return map;
+}
+
+async function fetchIkasVariantTypes() {
+  if (!ikasConfigured()) return [];
+  try {
+    const query = `
+      query {
+        listVariantType {
+          id
+          name
+          selectionType
+          values {
+            id
+            name
+            colorCode
+            thumbnailImageId
+          }
+        }
+      }
+    `;
+    const data = await ikasGraphQL(query, {}, "ikas variant types");
+    return normalizeIkasVariantTypeRows(data && data.listVariantType);
+  } catch (error) {
+    console.error("ikas variant types error:", error && error.message ? error.message.slice(0, 900) : error);
+    return [];
+  }
+}
+
+function extractIkasVariantPrice(prices) {
+  const list = Array.isArray(prices) ? prices : (prices ? [prices] : []);
+  const firstWithDiscount = list.find((item) => Number(item && item.discountPrice) > 0);
+  const firstWithSell = list.find((item) => Number(item && item.sellPrice) > 0);
+  const first = firstWithDiscount || firstWithSell || list[0] || {};
+  return {
+    sellPrice: Number(first.sellPrice || first.price || first.amount || 0),
+    discountPrice: Number(first.discountPrice || first.discountedPrice || 0)
+  };
+}
+
 async function fetchIkasProducts(categories = []) {
   if (!ikasConfigured()) return [];
   const categoryMap = new Map((categories || []).map((category) => [String(category.id), category]));
-  const normalize = (rows) => normalizeIkasProducts(rows, categoryMap);
+  const variantTypes = await fetchIkasVariantTypes();
+  const variantTypeMap = buildIkasVariantTypeMap(variantTypes);
+  const normalize = (rows) => normalizeIkasProducts(rows, categoryMap, variantTypeMap);
 
-  // Bu sürüm özellikle stabil çalışsın diye debug çıktısında doğrulanmış alanları kullanır.
-  // Senin ikas şemanda Product için id/name/categoryIds kesin çalışıyor.
-  // Variant alanları mağazaya göre farklı çıktığı için ürün listesini patlatmamak adına burada çekmiyoruz.
   const attempts = [
+    {
+      label: "ikas products mapped-variants-prices",
+      fields: `
+        id
+        name
+        categoryIds
+        productVariantTypes {
+          order
+          variantTypeId
+          variantValueIds
+        }
+        variants {
+          id
+          sku
+          variantValueIds {
+            variantTypeId
+            variantValueId
+          }
+          prices { sellPrice discountPrice }
+        }
+      `
+    },
+    {
+      label: "ikas products mapped-variants-no-prices",
+      fields: `
+        id
+        name
+        categoryIds
+        productVariantTypes {
+          order
+          variantTypeId
+          variantValueIds
+        }
+        variants {
+          id
+          sku
+          variantValueIds {
+            variantTypeId
+            variantValueId
+          }
+        }
+      `
+    },
     {
       label: "ikas products variants-prices-only",
       fields: `
@@ -1455,7 +1575,7 @@ async function fetchIkasProducts(categories = []) {
   return [];
 }
 
-function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
+function normalizeIkasProducts(rawProducts, categoryMap = new Map(), variantTypeMap = new Map()) {
   return rawProducts.map((product) => {
     const categoryIds = Array.isArray(product.categoryIds)
       ? product.categoryIds.map(valueOrEmpty).filter(Boolean)
@@ -1477,17 +1597,74 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
           return found || { id, name: `Kategori ${id.slice(0, 6)}`, image: "", imageId: "" };
         }).filter((category) => category.id || category.name);
 
+    const productVariantTypes = Array.isArray(product.productVariantTypes)
+      ? product.productVariantTypes.map((type, index) => {
+          const typeId = valueOrEmpty(type.variantTypeId);
+          const found = variantTypeMap.get(typeId);
+          const values = Array.isArray(type.variantValueIds)
+            ? type.variantValueIds.map((valueId) => {
+                const value = found && found.valuesById ? found.valuesById.get(String(valueId)) : null;
+                return {
+                  id: valueOrEmpty(valueId),
+                  name: valueOrEmpty(value && value.name) || valueOrEmpty(valueId),
+                  colorCode: valueOrEmpty(value && value.colorCode),
+                  thumbnailImageId: valueOrEmpty(value && value.thumbnailImageId)
+                };
+              }).filter((value) => value.id || value.name)
+            : [];
+          return {
+            order: Number(type.order || index),
+            variantTypeId: typeId,
+            name: valueOrEmpty(found && found.name) || (typeId ? `Varyant ${index + 1}` : "Varyant"),
+            selectionType: valueOrEmpty(found && found.selectionType),
+            values
+          };
+        }).filter((type) => type.variantTypeId || type.values.length)
+      : [];
+
     const variants = Array.isArray(product.variants) ? product.variants.map((variant) => {
-      const variantText = Array.isArray(variant.variantValues)
-        ? variant.variantValues.map((value) => {
+      const relationPairs = Array.isArray(variant.variantValueIds)
+        ? variant.variantValueIds.map((relation) => {
+            const typeId = valueOrEmpty(relation && relation.variantTypeId);
+            const valueId = valueOrEmpty(relation && relation.variantValueId);
+            const type = variantTypeMap.get(typeId);
+            const value = type && type.valuesById ? type.valuesById.get(valueId) : null;
+            return {
+              variantTypeId: typeId,
+              variantValueId: valueId,
+              variantTypeName: valueOrEmpty(type && type.name) || (typeId ? `Varyant ${typeId.slice(0, 6)}` : "Varyant"),
+              variantValueName: valueOrEmpty(value && value.name) || valueId,
+              colorCode: valueOrEmpty(value && value.colorCode),
+              thumbnailImageId: valueOrEmpty(value && value.thumbnailImageId)
+            };
+          }).filter((value) => value.variantValueId || value.variantValueName)
+        : [];
+
+      const legacyPairs = Array.isArray(variant.variantValues)
+        ? variant.variantValues.map((value) => ({
+            variantTypeId: "",
+            variantValueId: "",
+            variantTypeName: valueOrEmpty(value.variantTypeName),
+            variantValueName: valueOrEmpty(value.variantValueName),
+            colorCode: "",
+            thumbnailImageId: ""
+          })).filter((value) => value.variantValueName)
+        : [];
+
+      const variantValues = relationPairs.length ? relationPairs : legacyPairs;
+      const variantText = variantValues.length
+        ? variantValues.map((value) => {
             const left = valueOrEmpty(value.variantTypeName);
             const right = valueOrEmpty(value.variantValueName);
             return right ? (left ? `${left}: ${right}` : right) : "";
           }).filter(Boolean).join(" / ")
         : "";
+
       const stockFromStocks = Array.isArray(variant.stocks)
         ? variant.stocks.reduce((sum, item) => sum + Number(item.stockCount || 0), 0)
         : 0;
+      const priceInfo = extractIkasVariantPrice(variant.prices);
+
       return {
         id: valueOrEmpty(variant.id),
         name: valueOrEmpty(product.name) || "Ürün",
@@ -1498,17 +1675,15 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
         productId: valueOrEmpty(product.id),
         slug: "",
         variantText,
-        variantValues: Array.isArray(variant.variantValues)
-          ? variant.variantValues.map((value) => ({
-              variantTypeName: valueOrEmpty(value.variantTypeName),
-              variantValueName: valueOrEmpty(value.variantValueName)
-            })).filter((value) => value.variantValueName)
-          : [],
+        variantValues,
         variantValueIds: Array.isArray(variant.variantValueIds)
-          ? variant.variantValueIds.map(valueOrEmpty).filter(Boolean)
+          ? variant.variantValueIds.map((relation) => ({
+              variantTypeId: valueOrEmpty(relation && relation.variantTypeId),
+              variantValueId: valueOrEmpty(relation && relation.variantValueId)
+            })).filter((relation) => relation.variantValueId || relation.variantTypeId)
           : [],
-        sellPrice: Number((variant.prices && variant.prices.sellPrice) || 0),
-        discountPrice: Number((variant.prices && variant.prices.discountPrice) || 0),
+        sellPrice: priceInfo.sellPrice,
+        discountPrice: priceInfo.discountPrice,
         stock: stockFromStocks,
         isActive: typeof variant.isActive === "boolean" ? variant.isActive : true
       };
@@ -1524,6 +1699,7 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
       totalStock: Number(product.totalStock || variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0) || 0),
       categoryIds: categoryIds.length ? categoryIds : categories.map((category) => category.id).filter(Boolean),
       categories,
+      variantTypes: productVariantTypes.sort((a, b) => Number(a.order || 0) - Number(b.order || 0)),
       variants,
       createdAt: normalizeIkasDate(product.createdAt),
       updatedAt: normalizeIkasDate(product.updatedAt)
@@ -5624,6 +5800,11 @@ function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFrac
     }).filter(function(x){return x.value});
   }
   function variantGroups(product){
+    if(product && Array.isArray(product.variantTypes) && product.variantTypes.length){
+      return product.variantTypes.map(function(type){
+        return {type:type.name||'Varyant', values:(type.values||[]).map(function(value){return value.name||value.id||''}).filter(Boolean)};
+      }).filter(function(g){return g.values.length});
+    }
     var map={};
     var order=[];
     (product&&product.variants||[]).forEach(function(v){
