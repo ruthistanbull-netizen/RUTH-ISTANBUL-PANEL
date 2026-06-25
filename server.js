@@ -5182,6 +5182,20 @@ function adminHtml(serverAdmin) {
   white-space:pre-wrap;
 }
 
+
+
+/* V100: keep exchange picker open during background refresh/scroll */
+#page-exchange .exchange-product-picker.open .exchange-product-menu{
+  display:block !important;
+  z-index:9999 !important;
+}
+@media(max-width:820px){
+  #page-exchange .exchange-product-picker.open .exchange-product-menu{
+    position:relative !important;
+    max-height:62vh !important;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -5379,7 +5393,7 @@ function adminHtml(serverAdmin) {
 <script>
 (function(){
   var token=localStorage.getItem('ruth_admin_token')||'';
-  var conversations=[]; var reminders=[]; var exchangeRecords=[]; var returnRecords=[]; var selectedExchangeCustomerKey=''; var selectedReturnOrderId=''; var expandedIkasCustomerKey=''; var exchangeCustomerPage=1; var returnOrdersPage=1; var exchangeDrafts={}; var exchangeNotesPage=1; var exchangePickerTouchMoved=false; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null; var ikasLoading=false; var ikasAutoTimer=null; var ikasConnecting=false; var ikasConnectedFast=false; var ikasStableStatus='Bağlanıyor'; var selectedAdminImage=null;
+  var conversations=[]; var reminders=[]; var exchangeRecords=[]; var returnRecords=[]; var selectedExchangeCustomerKey=''; var selectedReturnOrderId=''; var expandedIkasCustomerKey=''; var exchangeCustomerPage=1; var returnOrdersPage=1; var exchangeDrafts={}; var exchangeNotesPage=1; var exchangePickerTouchMoved=false; var exchangePickerTouchMovedAt=0; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null; var ikasLoading=false; var ikasAutoTimer=null; var ikasConnecting=false; var ikasConnectedFast=false; var ikasStableStatus='Bağlanıyor'; var selectedAdminImage=null;
   var storedDatePreset=localStorage.getItem('ruth_panel_date_preset'); var datePreset=storedDatePreset||'today'; if(!localStorage.getItem('ruth_panel_date_default_today_v18')){datePreset='today'; localStorage.setItem('ruth_panel_date_preset','today'); localStorage.setItem('ruth_panel_date_default_today_v18','1')} var dateStart=localStorage.getItem('ruth_panel_date_start')||''; var dateEnd=localStorage.getItem('ruth_panel_date_end')||''; var ordersPage=1; var allOrdersPage=1; var deliveredOrdersPage=1; var orderSearch=''; var productSearch='';
   var ISTANBUL_TZ='Europe/Istanbul'; var TR_OFFSET_MS=3*60*60*1000;
   function $(id){return document.getElementById(id)}
@@ -5525,7 +5539,7 @@ function adminHtml(serverAdmin) {
 
   function loadConversations(silent){ return api('/api/admin/conversations').then(function(d){conversations=d.conversations||[]; renderAll(); if(activeId){ if(activeRoute==='support')loadMessages(activeId,true); if(activeRoute==='crm')loadCrmDetail(activeId,true); }}).catch(function(err){if(!silent)toast(err.message)})}
   function loadReminders(){return api('/api/admin/reminders/due').then(function(d){reminders=d.reminders||[]; renderReminders()}).catch(function(){})}
-  function loadExchangeRecords(){return api('/api/admin/exchanges').then(function(d){exchangeRecords=d.exchanges||[]; renderIkas(); renderIkasCustomers(); renderExchange(); renderExchangeNotes();}).catch(function(){exchangeRecords=[]})}
+  function loadExchangeRecords(){return api('/api/admin/exchanges').then(function(d){exchangeRecords=d.exchanges||[]; renderIkas(); renderIkasCustomers(); safeRenderExchange(); renderExchangeNotes();}).catch(function(){exchangeRecords=[]})}
   function loadReturnRecords(){return api('/api/admin/returns').then(function(d){returnRecords=d.returns||[]; renderIkas(); renderReturn();}).catch(function(){returnRecords=[]})}
   function ikasHasVisibleData(s){
     return Boolean(s && (((s.orders||[]).length) || ((s.products||[]).length) || ((s.collections||[]).length) || ((s.readyOrders||[]).length) || ((s.readyProductTotals||[]).length)));
@@ -5642,8 +5656,19 @@ function adminHtml(serverAdmin) {
       setIkasStatusText(isIkasActuallyConnected(ikasSummary)?'Bağlandı':ikasCurrentStatusText());
     });
   }
+  function exchangeUiBusy(){
+    if(activeRoute!=='exchange')return false;
+    if(document.querySelector('.exchange-product-picker.open'))return true;
+    var ae=document.activeElement;
+    if(ae && ae.closest && (ae.closest('.exchange-product-menu') || ae.closest('.exchange-finance-row') || ae.closest('.exchange-variant-box')))return true;
+    return false;
+  }
+  function safeRenderExchange(){
+    if(exchangeUiBusy())return;
+    renderExchange();
+  }
   function itemInDate(value){if(datePreset==='all')return true; var t=Date.parse(value||''); if(!t)return false; var r=activeDateRange(); return t>=r.start&&t<r.end}
-  function renderAll(){ var datedConversations=conversations.filter(function(c){return itemInDate(c.updatedAt||c.lastCustomerMessageAt||c.createdAt)}); var open=datedConversations.filter(function(c){return c.status!=='closed'}).length; var unread=datedConversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0); var datedReminders=reminders.filter(function(r){return itemInDate(r.reminderAt||r.createdAt)}); setText('statOpen',open); setText('statUnread',unread); setText('statReminders',datedReminders.length); setText('badgeSupport',conversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0)); setText('topBadge',unread); renderRecent(); renderConversations(); renderCustomers(); renderIkasCustomers(); renderExchange(); renderReturn(); renderExchangeNotes(); renderReminders(); }
+  function renderAll(){ var datedConversations=conversations.filter(function(c){return itemInDate(c.updatedAt||c.lastCustomerMessageAt||c.createdAt)}); var open=datedConversations.filter(function(c){return c.status!=='closed'}).length; var unread=datedConversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0); var datedReminders=reminders.filter(function(r){return itemInDate(r.reminderAt||r.createdAt)}); setText('statOpen',open); setText('statUnread',unread); setText('statReminders',datedReminders.length); setText('badgeSupport',conversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0)); setText('topBadge',unread); renderRecent(); renderConversations(); renderCustomers(); renderIkasCustomers(); safeRenderExchange(); renderReturn(); renderExchangeNotes(); renderReminders(); }
   function renderRecent(){ var el=$('recentConversations'); if(!el)return; var items=conversations.slice(0,4); if(!items.length){el.innerHTML='<div class="empty">Henüz konuşma yok.</div>';return;} el.innerHTML=items.map(function(c){return '<div class="mini-row"><div class="row"><div class="name">'+escapeHtml(c.displayName||'Ziyaretçi')+'</div><span class="time">'+fmtDate(c.updatedAt)+'</span></div><div class="preview">'+escapeHtml(c.lastMessageText||'Yeni konuşma')+'</div></div>'}).join('') }
   function renderReminders(){var datedReminders=reminders.filter(function(r){return itemInDate(r.reminderAt||r.createdAt)}); setText('statReminders',datedReminders.length); setText('badgeNotify',reminders.length); var el=$('remindersList'); if(!el)return; if(!datedReminders.length){el.innerHTML='<div class="empty">Seçili tarihte bekleyen hatırlatma yok.</div>';return;} el.innerHTML=datedReminders.slice(0,4).map(function(n){return '<div class="mini-row"><div class="row"><div class="name">'+escapeHtml(n.body||'Hatırlatma')+'</div><span class="time">□</span></div><div class="preview">'+fmtDate(n.reminderAt)+'</div></div>'}).join('')}
   function filteredConversations(){ var term=(($('searchInput')&&$('searchInput').value)||($('crmSearch')&&$('crmSearch').value)||'').toLowerCase(); if(!term)return conversations; return conversations.filter(function(c){return [c.displayName,c.visitorPhone,c.lastMessageText,c.pageTitle].join(' ').toLowerCase().indexOf(term)>=0}) }
@@ -5775,12 +5800,12 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
         var oldPrice=Number(i.unitPrice||0);
         var draftKey=String(o.id||'order')+'::'+lineId;
         var draft=exchangeDrafts[draftKey]||{};
-        var diffHtml='<div class="exchange-price-diff"><span class="price-muted">Yeni ürün seçince fiyat farkı görünür</span></div>';
+        var diffHtml='<div class="exchange-price-diff"><span class="price-muted">Yeni ürün seçince fiyat farkı görünür</span><input type="hidden" class="exchange-finance-status" value="not_selected"></div>';
         if(draft.productId||draft.productName){
           var d=Number(draft.price||0)-oldPrice;
-          if(d>0)diffHtml='<div class="exchange-price-diff pay-extra">Ekstra ödenecek: <b>'+money(d)+'</b></div>';
-          else if(d<0)diffHtml='<div class="exchange-price-diff money-left">Kalan para: <b>'+money(Math.abs(d))+'</b></div>';
-          else diffHtml='<div class="exchange-price-diff price-even">Fiyat farkı yok</div>';
+          if(d>0)diffHtml='<div class="exchange-price-diff pay-extra"><div>Ekstra ödenecek: <b>'+money(d)+'</b></div>'+financeControlsHtml(d,draft.financeStatus)+'</div>';
+          else if(d<0)diffHtml='<div class="exchange-price-diff money-left"><div>Kalan para: <b>'+money(Math.abs(d))+'</b></div>'+financeControlsHtml(d,draft.financeStatus)+'</div>';
+          else diffHtml='<div class="exchange-price-diff price-even">Fiyat farkı yok'+financeControlsHtml(d,draft.financeStatus)+'</div>';
         }
         lines.push('<div class="exchange-line" data-line-id="'+escapeHtml(lineId)+'" data-base-line-id="'+escapeHtml(i.id||idx)+'" data-unit-index="'+unit+'" data-old-price="'+escapeHtml(oldPrice)+'">'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+unitLabel+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+'Eski fiyat: '+money(oldPrice)+'</div></div><div>'+productPickerHtml(draftKey)+diffHtml+'</div></div>');
       }
@@ -5992,12 +6017,15 @@ function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFrac
     var first=box.querySelector('.exchange-variant-group-select,.exchange-variant-single-select,.exchange-variant-select');
     if(first)selectExchangeVariant(first);
   }
-  function financeControlsHtml(diff){
+  function selectedAttr(value, selected){return String(value)===String(selected)?' selected':''}
+  function financeControlsHtml(diff, selected){
     if(diff>0){
-      return '<div class="exchange-finance-row"><select class="input exchange-finance-status"><option value="payment_pending">Ödeme bekliyor</option><option value="payment_received">Ödeme alındı</option><option value="payment_link_sent">Ödeme linki gönderildi</option></select><button type="button" class="btn ghost exchange-copy-payment">Mesajı kopyala</button></div><div class="finance-note">Gerçek ikas ödeme linkini bağlamak için GenerateOrderPaymentLinkInput alanlarını bir sonraki kontrolde çıkaracağız.</div>';
+      selected=selected||'payment_pending';
+      return '<div class="exchange-finance-row"><select class="input exchange-finance-status"><option value="payment_pending"'+selectedAttr('payment_pending',selected)+'>Ödeme bekliyor</option><option value="payment_received"'+selectedAttr('payment_received',selected)+'>Ödeme alındı</option><option value="payment_link_sent"'+selectedAttr('payment_link_sent',selected)+'>Ödeme linki gönderildi</option></select><button type="button" class="btn ghost exchange-copy-payment">Mesajı kopyala</button></div><div class="finance-note">Gerçek ikas ödeme linkini bağlamak için GenerateOrderPaymentLinkInput alanları alındı; sonraki sürümde güvenli yazma bağlanacak.</div>';
     }
     if(diff<0){
-      return '<div class="exchange-finance-row"><select class="input exchange-finance-status"><option value="refund_pending">Geri ödeme bekliyor</option><option value="refund_done">Geri ödeme yapıldı</option><option value="coupon_given">Kupon verildi</option></select><button type="button" class="btn ghost exchange-copy-refund">Mesajı kopyala</button></div><div class="finance-note">Gerçek ikas geri ödeme için refundOrderLine input alanı doğrulanınca otomatik bağlanır.</div>';
+      selected=selected||'refund_pending';
+      return '<div class="exchange-finance-row"><select class="input exchange-finance-status"><option value="refund_pending"'+selectedAttr('refund_pending',selected)+'>Geri ödeme bekliyor</option><option value="refund_done"'+selectedAttr('refund_done',selected)+'>Geri ödeme yapıldı</option><option value="coupon_given"'+selectedAttr('coupon_given',selected)+'>Kupon verildi</option></select><button type="button" class="btn ghost exchange-copy-refund">Mesajı kopyala</button></div><div class="finance-note">Tam otomatik iade için stockLocationId ve refund line detayları gerekir; güvenli modda durum kaydı tutulur.</div>';
     }
     return '<input type="hidden" class="exchange-finance-status" value="even">';
   }
@@ -6019,13 +6047,15 @@ function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFrac
     var diff=newPrice-oldPrice;
     if(diff>0){
       box.className='exchange-price-diff pay-extra';
-      box.innerHTML='<div>Ekstra ödenecek: <b>'+money(diff)+'</b></div>'+financeControlsHtml(diff);
+      var current=box.querySelector('.exchange-finance-status')?box.querySelector('.exchange-finance-status').value:'';
+      box.innerHTML='<div>Ekstra ödenecek: <b>'+money(diff)+'</b></div>'+financeControlsHtml(diff,current);
     }else if(diff<0){
       box.className='exchange-price-diff money-left';
-      box.innerHTML='<div>Kalan para: <b>'+money(Math.abs(diff))+'</b></div>'+financeControlsHtml(diff);
+      var current2=box.querySelector('.exchange-finance-status')?box.querySelector('.exchange-finance-status').value:'';
+      box.innerHTML='<div>Kalan para: <b>'+money(Math.abs(diff))+'</b></div>'+financeControlsHtml(diff,current2);
     }else{
       box.className='exchange-price-diff price-even';
-      box.innerHTML='Fiyat farkı yok'+financeControlsHtml(diff);
+      box.innerHTML='Fiyat farkı yok'+financeControlsHtml(diff,'even');
     }
   }
     function orderReturnRecord(o){return returnRecords.find(function(x){return String(x.orderId||'')===String(o&&o.id||'')})}
@@ -6245,10 +6275,12 @@ function renderExchangeNotes(){
   on('refreshSupport','click',function(){loadConversations(false)}); on('refreshCrm','click',function(){loadConversations(false);loadIkasSummary(false,false);loadExchangeRecords()}); on('searchInput','input',renderConversations); on('crmSearch','input',renderCustomers); on('ikasCustomerSearch','input',renderIkasCustomers); on('exchangeSearch','input',function(){exchangeCustomerPage=1;renderExchange();}); on('returnSearch','input',function(){returnOrdersPage=1;renderReturn();});
 
   document.addEventListener('click',function(e){
-    if(exchangePickerTouchMoved){
+    var scrolledRecently=exchangePickerTouchMoved || (Date.now()-Number(exchangePickerTouchMovedAt||0)<900);
+    if(scrolledRecently && document.querySelector('.exchange-product-picker.open')){
       exchangePickerTouchMoved=false;
-      if(e.target.closest&&e.target.closest('.exchange-product-menu')){
+      if(!e.target.closest || !e.target.closest('.exchange-product-choice')){
         e.preventDefault();
+        e.stopPropagation();
         return;
       }
     }
@@ -6322,10 +6354,26 @@ function renderExchangeNotes(){
     if(e.target&&e.target.closest&&e.target.closest('.exchange-product-menu'))exchangePickerTouchMoved=false;
   },{passive:true});
   document.addEventListener('touchmove',function(e){
-    if(e.target&&e.target.closest&&e.target.closest('.exchange-product-menu'))exchangePickerTouchMoved=true;
+    if(e.target&&e.target.closest&&e.target.closest('.exchange-product-menu')){
+      exchangePickerTouchMoved=true;
+      exchangePickerTouchMovedAt=Date.now();
+    }
   },{passive:true});
+  document.addEventListener('scroll',function(e){
+    if(e.target&&e.target.closest&&e.target.closest('.exchange-product-menu')){
+      exchangePickerTouchMoved=true;
+      exchangePickerTouchMovedAt=Date.now();
+    }
+  },true);
 
   document.addEventListener('change',function(e){
+    var finance=e.target&&e.target.closest?e.target.closest('.exchange-finance-status'):null;
+    if(finance){
+      var line=finance.closest('.exchange-line');
+      var wrap=line&&line.querySelector('.exchange-pick-wrap');
+      if(wrap)saveExchangeDraft(wrap,{financeStatus:finance.value});
+      return;
+    }
     var select=e.target&&e.target.closest?e.target.closest('.exchange-variant-group-select,.exchange-variant-single-select,.exchange-variant-select'):null;
     if(!select)return;
     selectExchangeVariant(select);
