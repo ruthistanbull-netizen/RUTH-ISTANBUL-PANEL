@@ -4603,6 +4603,125 @@ function adminHtml(serverAdmin) {
 
 
 
+
+
+/* V94: mobile exchange layout hard fix */
+@media(max-width:820px){
+  #page-exchange .exchange-order-card{
+    padding:14px 12px !important;
+  }
+  #page-exchange .exchange-line{
+    grid-template-columns:56px minmax(0,1fr) !important;
+    gap:12px !important;
+    align-items:start !important;
+  }
+  #page-exchange .exchange-line > .prod-img{
+    width:56px !important;
+    height:56px !important;
+  }
+  #page-exchange .exchange-line > div:nth-child(2){
+    min-width:0 !important;
+  }
+  #page-exchange .exchange-line > div:nth-child(2) .name{
+    font-size:15px !important;
+    line-height:1.28 !important;
+    white-space:normal !important;
+    overflow:visible !important;
+    text-overflow:clip !important;
+  }
+  #page-exchange .exchange-line > div:nth-child(2) .preview{
+    margin-top:4px !important;
+    white-space:normal !important;
+    line-height:1.35 !important;
+  }
+  #page-exchange .exchange-line > div:nth-child(3){
+    grid-column:1 / -1 !important;
+    width:100% !important;
+    min-width:0 !important;
+    margin-top:6px !important;
+  }
+  #page-exchange .exchange-pick-wrap{
+    grid-template-columns:1fr !important;
+    gap:12px !important;
+    width:100% !important;
+  }
+  #page-exchange .exchange-product-picker,
+  #page-exchange .exchange-variant-box,
+  #page-exchange .exchange-variant-select,
+  #page-exchange .exchange-price-diff,
+  #page-exchange .exchange-form-row > .field,
+  #page-exchange .exchange-save,
+  #page-exchange .exchange-reminder-at,
+  #page-exchange .exchange-reason{
+    width:100% !important;
+    min-width:0 !important;
+  }
+  #page-exchange .exchange-product-trigger{
+    min-height:64px !important;
+    padding:10px 12px !important;
+    grid-template-columns:48px minmax(0,1fr) 18px !important;
+    gap:10px !important;
+  }
+  #page-exchange .exchange-product-trigger .prod-img{
+    width:48px !important;
+    height:48px !important;
+  }
+  #page-exchange .exchange-product-trigger .pick-copy b,
+  #page-exchange .exchange-product-choice b{
+    white-space:normal !important;
+    overflow:visible !important;
+    text-overflow:clip !important;
+    line-height:1.25 !important;
+    display:block !important;
+  }
+  #page-exchange .exchange-product-trigger .pick-copy small,
+  #page-exchange .exchange-product-choice small{
+    white-space:normal !important;
+    overflow:visible !important;
+    text-overflow:clip !important;
+    line-height:1.3 !important;
+    display:block !important;
+  }
+  #page-exchange .exchange-product-menu{
+    position:relative !important;
+    left:auto !important;
+    right:auto !important;
+    top:auto !important;
+    margin-top:8px !important;
+    max-height:260px !important;
+    width:100% !important;
+  }
+  #page-exchange .exchange-product-choice{
+    grid-template-columns:48px minmax(0,1fr) !important;
+    align-items:start !important;
+  }
+  #page-exchange .exchange-variant-box{
+    gap:7px !important;
+  }
+  #page-exchange .exchange-variant-box label{
+    font-size:12px !important;
+  }
+  #page-exchange .exchange-variant-select,
+  #page-exchange .exchange-reason,
+  #page-exchange .exchange-reminder-at{
+    min-height:48px !important;
+  }
+  #page-exchange .exchange-price-diff{
+    margin-top:10px !important;
+    font-size:13px !important;
+    line-height:1.35 !important;
+  }
+  #page-exchange .exchange-form-row{
+    grid-template-columns:1fr !important;
+    gap:12px !important;
+  }
+  #page-exchange .exchange-save{
+    min-height:48px !important;
+    display:flex !important;
+    align-items:center !important;
+    justify-content:center !important;
+  }
+}
 /* V93: variant/fiyat/logo hard fix */
 .exchange-product-choice.selected{
   background:rgba(216,182,111,.10) !important;
