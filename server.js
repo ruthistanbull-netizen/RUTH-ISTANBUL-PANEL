@@ -625,6 +625,52 @@ async function handleAdminApi(req, res, url) {
     return sendJson(res, { ok: true });
   }
 
+  if (req.method === "GET" && pathname === "/api/admin/ikas/connect") {
+    const startedAt = Date.now();
+    try {
+      if (!ikasConfigured()) {
+        return sendJson(res, {
+          ok: true,
+          connected: false,
+          status: "env_missing",
+          message: "ikas env değerleri eksik."
+        });
+      }
+
+      await withTimeout((async () => {
+        await getIkasAccessToken();
+        await ikasGraphQL(`query RuthQuickConnect { __schema { queryType { name } } }`, {}, "ikas quick connect");
+      })(), 5000, "ikas bağlantısı 5 saniye içinde tamamlanamadı");
+
+      ikasLastWarm = { ok: true, at: new Date().toISOString(), error: "" };
+
+      setTimeout(() => {
+        warmIkasSummary("quick-connect").catch(() => {});
+      }, 50);
+
+      return sendJson(res, {
+        ok: true,
+        connected: true,
+        status: "connected",
+        message: "Bağlandı",
+        elapsedMs: Date.now() - startedAt
+      });
+    } catch (error) {
+      ikasLastWarm = { ok: false, at: new Date().toISOString(), error: error && error.message ? error.message : String(error) };
+      setTimeout(() => {
+        warmIkasSummary("quick-connect-retry").catch(() => {});
+      }, 1500);
+      return sendJson(res, {
+        ok: true,
+        connected: false,
+        status: "connecting",
+        message: "Bağlanıyor",
+        error: ikasLastWarm.error,
+        elapsedMs: Date.now() - startedAt
+      });
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/ikas/debug") {
     const debug = await buildIkasDebug();
     return sendJson(res, debug);
@@ -816,6 +862,14 @@ function escapeRegExp(value) {
   return String(value || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+
+
+function withTimeout(promise, ms, message) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(message || "timeout")), ms))
+  ]);
+}
 
 function ikasConfigured() {
   return Boolean(IKAS_STORE_NAME && IKAS_CLIENT_ID && IKAS_CLIENT_SECRET && IKAS_GRAPHQL_URL && IKAS_TOKEN_URL);
@@ -3283,6 +3337,34 @@ function adminHtml(serverAdmin) {
   .pull-refresh{display:none}
 }
 
+
+
+/* ikas fast connect status */
+#ikasStatus{
+  transition:color .18s ease,text-shadow .18s ease;
+}
+#ikasStatus.ikas-connecting{
+  color:#f0c66b !important;
+}
+#ikasStatus.ikas-connecting:after{
+  content:"";
+  display:inline-block;
+  width:1.1em;
+  text-align:left;
+  animation:ikasDots 1.1s steps(4,end) infinite;
+}
+#ikasStatus.ikas-connected{
+  color:#77cc92 !important;
+  text-shadow:0 0 12px rgba(119,204,146,.16);
+}
+@keyframes ikasDots{
+  0%{content:""}
+  25%{content:"."}
+  50%{content:".."}
+  75%{content:"..."}
+  100%{content:""}
+}
+
 </style>
 </head>
 <body>
@@ -3462,7 +3544,7 @@ function adminHtml(serverAdmin) {
 <script>
 (function(){
   var token=localStorage.getItem('ruth_admin_token')||'';
-  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null; var ikasLoading=false; var ikasAutoTimer=null; var selectedAdminImage=null;
+  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null; var ikasLoading=false; var ikasAutoTimer=null; var ikasConnecting=false; var ikasConnectedFast=false; var selectedAdminImage=null;
   var storedDatePreset=localStorage.getItem('ruth_panel_date_preset'); var datePreset=storedDatePreset||'today'; if(!localStorage.getItem('ruth_panel_date_default_today_v18')){datePreset='today'; localStorage.setItem('ruth_panel_date_preset','today'); localStorage.setItem('ruth_panel_date_default_today_v18','1')} var dateStart=localStorage.getItem('ruth_panel_date_start')||''; var dateEnd=localStorage.getItem('ruth_panel_date_end')||''; var ordersPage=1; var allOrdersPage=1; var deliveredOrdersPage=1; var orderSearch=''; var productSearch='';
   var ISTANBUL_TZ='Europe/Istanbul'; var TR_OFFSET_MS=3*60*60*1000;
   function $(id){return document.getElementById(id)}
@@ -3500,7 +3582,7 @@ function adminHtml(serverAdmin) {
   window.addEventListener('popstate',function(){setRoute(routeFromPath(),false)});
   function routeFromPath(){var p=location.pathname||'/admin/'; if(p.indexOf('/admin/')===0){p=p.slice('/admin/'.length)} else if(p==='/admin'){p=''}; while(p.endsWith('/')) p=p.slice(0,-1); return p||'overview'}
   function setRoute(route,push){var allowed=['overview','support','crm','orders','integration','notifications','products','reports','settings','ikas-orders','ikas-products','ikas-collections','ikas-ready-orders','ikas-ready-products']; if(allowed.indexOf(route)<0) route='overview'; activeRoute=route; qsa('.page').forEach(function(p){p.classList.remove('active')}); var page=$('page-'+route); if(page) page.classList.add('active'); qsa('.nav-item').forEach(function(n){n.classList.toggle('active',n.getAttribute('data-route')===route)}); var titles={overview:'Genel Bakış',support:'Canlı Destek',crm:'CRM',orders:'Siparişler',integration:'ikas Entegrasyonu',notifications:'Bildirimler',products:'Ürünler',reports:'Raporlar',settings:'Ayarlar','ikas-orders':'Tüm Siparişler','ikas-products':'Tüm Ürünler','ikas-collections':'Tüm Koleksiyonlar','ikas-ready-orders':'Hazırlanacak Siparişler','ikas-ready-products':'Hazırlanacak Ürün Toplamları'}; setText('crumbTitle',titles[route]||'Panel'); if(push) history.pushState(null,'','/admin/'+(route==='overview'?'':route)); if(route==='support'){loadConversations(true)} if(route==='crm'){loadConversations(true)} if(['orders','integration','products','ikas-orders','ikas-products','ikas-collections','ikas-ready-orders','ikas-ready-products'].indexOf(route)>=0){loadIkasSummary(true,false)} }
-  function loadAll(){ loadConversations(true); loadReminders(); loadIkasSummary(true,false); setInterval(function(){if(token)loadConversations(true)},6000); if(!ikasAutoTimer){ikasAutoTimer=setInterval(function(){if(token)loadIkasSummary(true,false)},120000);} }
+  function loadAll(){ loadConversations(true); loadReminders(); connectIkasFast(); loadIkasSummary(true,false); setInterval(function(){if(token)loadConversations(true)},6000); if(!ikasAutoTimer){ikasAutoTimer=setInterval(function(){if(token){connectIkasFast(); loadIkasSummary(true,false)}},120000);} }
 
   function refreshAllData(force){
     return Promise.all([
@@ -3581,13 +3663,45 @@ function adminHtml(serverAdmin) {
 
   function loadConversations(silent){ return api('/api/admin/conversations').then(function(d){conversations=d.conversations||[]; renderAll(); if(activeId){ if(activeRoute==='support')loadMessages(activeId,true); if(activeRoute==='crm')loadCrmDetail(activeId,true); }}).catch(function(err){if(!silent)toast(err.message)})}
   function loadReminders(){return api('/api/admin/reminders/due').then(function(d){reminders=d.reminders||[]; renderReminders()}).catch(function(){})}
+  function setIkasStatusText(value){
+    setText('ikasStatus', value);
+    var el=$('ikasStatus');
+    if(el){
+      el.classList.toggle('ikas-connecting', value==='Bağlanıyor');
+      el.classList.toggle('ikas-connected', value==='Bağlandı');
+    }
+  }
+  function connectIkasFast(){
+    if(ikasConnectedFast || ikasConnecting) return Promise.resolve(ikasConnectedFast);
+    ikasConnecting=true;
+    setIkasStatusText('Bağlanıyor');
+    return api('/api/admin/ikas/connect').then(function(d){
+      if(d && d.connected){
+        ikasConnectedFast=true;
+        setIkasStatusText('Bağlandı');
+        return true;
+      }
+      setIkasStatusText('Bağlanıyor');
+      setTimeout(function(){ if(token && !ikasConnectedFast) connectIkasFast(); }, 2500);
+      return false;
+    }).catch(function(){
+      setIkasStatusText('Bağlanıyor');
+      setTimeout(function(){ if(token && !ikasConnectedFast) connectIkasFast(); }, 2500);
+      return false;
+    }).finally(function(){ikasConnecting=false;});
+  }
   function loadIkasSummary(silent,force){
     if(ikasLoading)return Promise.resolve(ikasSummary);
     ikasLoading=true;
-    setText('ikasStatus','Bağlanıyor');
+    if(!ikasConnectedFast) connectIkasFast();
+    setIkasStatusText(ikasConnectedFast?'Bağlandı':'Bağlanıyor');
     var url='/api/admin/ikas/summary'+(force?'?refresh=1':'');
     return api(url).then(function(d){
       ikasSummary=d||ikasSummary;
+      if(ikasSummary.connected){
+        ikasConnectedFast=true;
+        setIkasStatusText('Bağlandı');
+      }
       renderIkas();
       return ikasSummary;
     }).catch(function(err){
@@ -3704,7 +3818,7 @@ function adminHtml(serverAdmin) {
     var collections=ikasSummary.collections||[];
     var units=orders.reduce(function(sum,o){return sum+(o.items||[]).reduce(function(s,i){return s+Number(i.quantity||0)},0)},0);
     var readyUnits=readyOrders.reduce(function(sum,o){return sum+(o.items||[]).reduce(function(s,i){return s+Number(i.quantity||0)},0)},0);
-    setText('statOrders',orders.length||0); setText('badgeOrders',orders.length||0); setText('ordersToday',orders.length||0); setText('unitsToday',units||0); setText('kindsToday',readyProducts.length||allProducts.length||0); setText('ordersTotal',orders.length||0); setText('unitsTotal',readyUnits||units||0); setText('productKinds',allProducts.length||readyProducts.length||0); setText('ikasStatus',ikasLoading?'Bağlanıyor':(ikasSummary.connected?'Bağlı':'Bağlantı bekliyor')); setText('readyOrdersBadge',readyOrders.length||0); setText('badgeReadyOrders',readyOrders.length||0); setText('allOrdersBadge',orders.length||0); setText('deliveredOrdersBadge',delivered.length||0);
+    setText('statOrders',orders.length||0); setText('badgeOrders',orders.length||0); setText('ordersToday',orders.length||0); setText('unitsToday',units||0); setText('kindsToday',readyProducts.length||allProducts.length||0); setText('ordersTotal',orders.length||0); setText('unitsTotal',readyUnits||units||0); setText('productKinds',allProducts.length||readyProducts.length||0); setIkasStatusText(ikasLoading&&!ikasConnectedFast?'Bağlanıyor':((ikasSummary.connected||ikasConnectedFast)?'Bağlandı':'Bağlanıyor')); setText('readyOrdersBadge',readyOrders.length||0); setText('badgeReadyOrders',readyOrders.length||0); setText('allOrdersBadge',orders.length||0); setText('deliveredOrdersBadge',delivered.length||0);
     var top=$('topProducts'); if(top){ top.innerHTML=readyProducts.length?readyProducts.slice(0,5).map(function(p,i){return '<div class="rail-product">'+imgHtml(p.image,'')+'<div><div class="name">'+(i+1)+'. '+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+Number(p.quantity||0)+' adet • Kargoya hazır</div></div></div>'}).join(''):'<div class="empty">Kargoya hazır ürün bulunamadı.</div>'; }
     var el=$('productTotals'); if(el){ el.innerHTML=readyProducts.length?readyProducts.map(readyProductRow).join(''):'<div class="empty">Kargoya hazır olarak işaretlenmiş siparişlerde ürün yok.</div>'; }
     var list=$('ordersList'); if(list){ if(orders.length){var pg=pagedHtml(orders,ordersPage,10,'orders',orderCard); ordersPage=pg.page; list.innerHTML=pg.html;} else {list.innerHTML=(ikasSummary.ikasError?'<div class="empty">'+escapeHtml(ikasSummary.ikasError)+'</div>':'<div class="empty">Henüz canlı sipariş verisi bağlı değil.</div>');} }
@@ -4374,7 +4488,7 @@ function start() {
       console.log(`RUTH manual live support listening on http://localhost:${PORT}`);
       console.log(`Storage: ${storage.kind}`);
       console.log(`Push ready: ${Boolean(webPush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY)}`);
-      setTimeout(() => warmIkasSummary("startup").catch(() => {}), 1200);
+      setTimeout(() => warmIkasSummary("startup").catch(() => {}), 100);
     });
   }
 
