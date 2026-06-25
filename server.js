@@ -83,8 +83,7 @@ const IKAS_CLIENT_SECRET = String(process.env.IKAS_CLIENT_SECRET || "").trim();
 const IKAS_GRAPHQL_URL = String(process.env.IKAS_GRAPHQL_URL || "https://api.myikas.com/api/v1/admin/graphql").trim();
 const IKAS_TOKEN_URL = IKAS_STORE_NAME ? `https://${IKAS_STORE_NAME}.myikas.com/api/admin/oauth/token` : "";
 const IKAS_STOREFRONT_URL = normalizeStorefrontUrl(process.env.IKAS_STOREFRONT_URL || process.env.RUTH_SITE_URL || "https://ruthistanbul.com");
-const IKAS_IMAGE_SOURCE = String(process.env.IKAS_IMAGE_SOURCE || "api").trim().toLowerCase();
-const IKAS_FETCH_STOREFRONT_IMAGES = IKAS_IMAGE_SOURCE !== "api" && String(process.env.IKAS_PRODUCT_IMAGES_DISABLED || "0") !== "1";
+const IKAS_FETCH_STOREFRONT_IMAGES = String(process.env.IKAS_PRODUCT_IMAGES_DISABLED || "0") !== "1";
 let ikasTokenCache = { token: "", expiresAt: 0 };
 let storefrontImageCache = { expiresAt: 0, bySlug: new Map(), byName: new Map(), urls: [] };
 let ikasSummaryCache = { expiresAt: 0, value: null };
@@ -842,7 +841,6 @@ async function buildIkasDebug() {
     ["listProduct_minimal", `query { listProduct { data { id name } } }`],
     ["listProduct_paginated_minimal", `query { listProduct(pagination: { limit: 5, page: 1 }) { count hasNext data { id name } } }`],
     ["listProduct_category_fields", `query { listProduct(pagination: { limit: 5, page: 1 }) { data { id name categoryIds } } }`],
-    ["listProduct_image_url_fields", `query { listProduct(pagination: { limit: 5, page: 1 }) { data { id name slug mainImageId imageId imageUrl } } }`],
     ["listProduct_variant_safe", `query { listProduct(pagination: { limit: 5, page: 1 }) { data { id name variants { id sku barcodeList variantValues { variantTypeName variantValueName } } } } }`]
   ];
   for (const [label, query] of productTests) result.tests.push(await debugGraphQL(label, query, summarizeFirstDataNode));
@@ -1060,41 +1058,6 @@ async function fetchIkasPaginatedList({ label, rootField, fields, normalize, max
 async function fetchIkasOrders() {
   const attempts = [
     {
-      label: "ikas orders product-image-fields",
-      fields: `
-        id
-        orderNumber
-        orderSequence
-        orderedAt
-        createdAt
-        updatedAt
-        status
-        orderPackageStatus
-        orderPaymentStatus
-        totalFinalPrice
-        totalPrice
-        currencySymbol
-        currencyCode
-        customer { id fullName firstName lastName email phone isGuestCheckout }
-        shippingAddress { firstName lastName phone city { name } district { name } }
-        orderPackages { id orderPackageNumber orderPackageFulfillStatus trackingInfo { cargoCompany trackingNumber trackingLink } }
-        orderLineItems {
-          id
-          quantity
-          status
-          finalPrice
-          price
-          product { id name slug mainImageId imageId imageUrl }
-          variant {
-            id
-            sku
-            variantValues { variantTypeName variantValueName }
-          }
-          options { name values { name value } }
-        }
-      `
-    },
-    {
       label: "ikas orders full",
       fields: `
         id
@@ -1275,15 +1238,11 @@ async function fetchIkasProducts(categories = []) {
   // Variant alanları mağazaya göre farklı çıktığı için ürün listesini patlatmamak adına burada çekmiyoruz.
   const attempts = [
     {
-      label: "ikas products api-image-url",
+      label: "ikas products variants-id-sku",
       fields: `
         id
         name
-        slug
         categoryIds
-        mainImageId
-        imageId
-        imageUrl
         variants {
           id
           sku
@@ -1291,29 +1250,29 @@ async function fetchIkasProducts(categories = []) {
       `
     },
     {
-      label: "ikas products api-main-image",
+      label: "ikas products variants-id-only",
       fields: `
         id
         name
         categoryIds
-        mainImageId
         variants {
           id
-          sku
         }
       `
     },
     {
-      label: "ikas products api-image-id",
+      label: "ikas products categoryIds-only",
       fields: `
         id
         name
         categoryIds
-        imageId
-        variants {
-          id
-          sku
-        }
+      `
+    },
+    {
+      label: "ikas products minimal-only",
+      fields: `
+        id
+        name
       `
     }
   ];
@@ -1378,8 +1337,8 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
         name: valueOrEmpty(product.name) || "Ürün",
         sku: valueOrEmpty(variant.sku),
         barcode: Array.isArray(variant.barcodeList) ? variant.barcodeList.join(", ") : "",
-        mainImageId: resolveIkasImageId(variant),
-        image: resolveIkasDirectImage(variant),
+        mainImageId: "",
+        image: "",
         productId: valueOrEmpty(product.id),
         slug: "",
         variantText,
@@ -1390,14 +1349,13 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map()) {
       };
     }) : [];
 
-    const productImageId = resolveIkasImageId(product);
-    const image = resolveIkasDirectImage(product);
+    const image = "";
     return {
       id: valueOrEmpty(product.id),
       name: valueOrEmpty(product.name) || "Ürün",
-      slug: valueOrEmpty(product.slug),
+      slug: "",
       image,
-      mainImageId: productImageId,
+      mainImageId: "",
       totalStock: Number(product.totalStock || variants.reduce((sum, variant) => sum + Number(variant.stock || 0), 0) || 0),
       categoryIds: categoryIds.length ? categoryIds : categories.map((category) => category.id).filter(Boolean),
       categories,
@@ -1709,11 +1667,8 @@ function normalizeIkasLineItem(item, order) {
     valueOrEmpty(variant.name) ||
     valueOrEmpty(item && item.name) ||
     "Ürün";
-  const mainImageId = valueOrEmpty(resolveIkasImageId(variant) || resolveIkasImageId(product) || resolveIkasImageId(item));
+  const mainImageId = valueOrEmpty(variant.mainImageId || product.mainImageId || item && item.mainImageId);
   const directImage =
-    resolveIkasDirectImage(item) ||
-    resolveIkasDirectImage(variant) ||
-    resolveIkasDirectImage(product) ||
     valueOrEmpty(item && item.imageUrl) ||
     valueOrEmpty(item && item.image) ||
     valueOrEmpty(product.imageUrl) ||
@@ -1770,38 +1725,6 @@ function buildIkasImageUrl(mainImageId) {
   const base = String(process.env.IKAS_IMAGE_BASE_URL || "").trim().replace(/\/+$/, "");
   if (base) return `${base}/${encodeURIComponent(id)}`;
   return "";
-}
-
-function resolveIkasImageId(source) {
-  const item = source && typeof source === "object" ? source : {};
-  return valueOrEmpty(
-    item.mainImageId ||
-    item.imageId ||
-    item.imageID ||
-    item.thumbnailImageId ||
-    item.thumbnailId ||
-    item.image && item.image.id ||
-    item.image && item.image.imageId ||
-    item.mainImage && item.mainImage.id ||
-    item.mainImage && item.mainImage.imageId
-  );
-}
-
-function resolveIkasDirectImage(source) {
-  const item = source && typeof source === "object" ? source : {};
-  const direct = valueOrEmpty(
-    item.imageUrl ||
-    item.imageURL ||
-    item.image_url ||
-    item.thumbnailUrl ||
-    item.thumbnailURL ||
-    item.image && item.image.url ||
-    item.image && item.image.src ||
-    item.mainImage && item.mainImage.url ||
-    item.mainImage && item.mainImage.src
-  );
-  if (direct) return direct;
-  return buildIkasImageUrl(resolveIkasImageId(item));
 }
 
 
