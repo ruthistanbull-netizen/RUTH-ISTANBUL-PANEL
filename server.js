@@ -1268,6 +1268,7 @@ async function fetchIkasProducts(categories = []) {
         variants {
           id
           sku
+          prices { sellPrice discountPrice }
         }
       `
     },
@@ -1711,6 +1712,8 @@ function normalizeIkasLineItem(item, order) {
     mainImageId,
     categories: Array.isArray(variant.categories) ? variant.categories.map((category) => ({ id: valueOrEmpty(category.id), name: valueOrEmpty(category.name) })).filter((category) => category.id || category.name) : [],
     quantity: Number((item && item.quantity) || 0),
+    unitPrice: Number((Number((item && (item.finalPrice ?? item.price)) || 0) / Math.max(1, Number((item && item.quantity) || 1))) || 0),
+    totalPrice: Number((item && (item.finalPrice ?? item.price)) || 0),
     statusRaw: valueOrEmpty(item && item.status),
     status: translateLineStatus(item && item.status),
     orderNumber: order && order.orderNumber ? `#${order.orderNumber}` : "",
@@ -4099,6 +4102,373 @@ function adminHtml(serverAdmin) {
   }
 }
 
+
+
+/* Ruth icon system polish */
+.nav-ico{
+  width:24px !important;
+  height:24px !important;
+  border-radius:9px !important;
+  background:linear-gradient(180deg,rgba(216,182,111,.13),rgba(216,182,111,.035)) !important;
+  border:1px solid rgba(216,182,111,.12) !important;
+  color:#d8b66f !important;
+}
+.nav-item.active .nav-ico{
+  background:linear-gradient(180deg,rgba(240,198,107,.25),rgba(216,182,111,.07)) !important;
+  border-color:rgba(240,198,107,.34) !important;
+  color:#f0c66b !important;
+  box-shadow:0 0 0 1px rgba(240,198,107,.04),0 10px 24px rgba(216,182,111,.08) !important;
+}
+.nav-ico svg{
+  width:17px !important;
+  height:17px !important;
+  stroke:currentColor !important;
+  fill:none !important;
+  stroke-width:1.85 !important;
+  stroke-linecap:round !important;
+  stroke-linejoin:round !important;
+}
+.nav-ico.sub{
+  opacity:.88;
+}
+.nav-ico.sub svg{
+  width:15px !important;
+  height:15px !important;
+}
+.metric-ico,
+.module-ico{
+  display:grid !important;
+  place-items:center !important;
+  color:#f0c66b !important;
+  background:
+    radial-gradient(circle at 35% 20%,rgba(240,198,107,.22),transparent 56%),
+    linear-gradient(180deg,rgba(216,182,111,.18),rgba(216,182,111,.045)) !important;
+  border:1px solid rgba(216,182,111,.18) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.045),0 12px 28px rgba(216,182,111,.055) !important;
+}
+.metric-ico svg,
+.module-ico svg,
+.quick-icon svg{
+  width:22px !important;
+  height:22px !important;
+  stroke:currentColor !important;
+  fill:none !important;
+  stroke-width:1.85 !important;
+  stroke-linecap:round !important;
+  stroke-linejoin:round !important;
+}
+.module-ico svg{
+  width:28px !important;
+  height:28px !important;
+}
+.quick-icon{
+  width:28px;
+  height:28px;
+  border-radius:10px;
+  display:grid;
+  place-items:center;
+  color:#f0c66b;
+  background:rgba(216,182,111,.075);
+  border:1px solid rgba(216,182,111,.12);
+  flex:0 0 auto;
+}
+.quick-icon svg{
+  width:16px !important;
+  height:16px !important;
+}
+.quick-left{
+  gap:10px !important;
+}
+@media(max-width:820px){
+  .nav-ico{
+    width:26px !important;
+    height:26px !important;
+  }
+  .metric-ico svg{
+    width:20px !important;
+    height:20px !important;
+  }
+}
+
+
+
+/* Ruth premium vector icon system v2 */
+.nav-ico{
+  width:28px !important;
+  height:28px !important;
+  min-width:28px !important;
+  border-radius:10px !important;
+  display:grid !important;
+  place-items:center !important;
+  color:#e7c470 !important;
+  background:
+    radial-gradient(circle at 35% 18%,rgba(240,198,107,.20),transparent 54%),
+    linear-gradient(180deg,rgba(216,182,111,.12),rgba(216,182,111,.035)) !important;
+  border:1px solid rgba(216,182,111,.16) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04) !important;
+}
+.nav-item.active .nav-ico{
+  color:#f4cf7a !important;
+  border-color:rgba(240,198,107,.36) !important;
+  background:
+    radial-gradient(circle at 35% 18%,rgba(240,198,107,.34),transparent 58%),
+    linear-gradient(180deg,rgba(216,182,111,.20),rgba(216,182,111,.055)) !important;
+  box-shadow:0 12px 28px rgba(216,182,111,.08), inset 0 1px 0 rgba(255,255,255,.06) !important;
+}
+.return-nav-ico{
+  color:#ff9a86 !important;
+  border-color:rgba(255,138,122,.22) !important;
+  background:
+    radial-gradient(circle at 35% 18%,rgba(255,138,122,.18),transparent 54%),
+    linear-gradient(180deg,rgba(255,138,122,.10),rgba(255,138,122,.025)) !important;
+}
+.nav-ico svg,
+.metric-ico svg,
+.module-ico svg,
+.quick-icon svg{
+  display:block !important;
+  stroke:currentColor !important;
+  fill:none !important;
+  stroke-linecap:round !important;
+  stroke-linejoin:round !important;
+  vector-effect:non-scaling-stroke !important;
+  shape-rendering:geometricPrecision !important;
+}
+.nav-ico svg{
+  width:18px !important;
+  height:18px !important;
+  stroke-width:1.65 !important;
+}
+.nav-ico.sub svg{
+  width:16px !important;
+  height:16px !important;
+  stroke-width:1.65 !important;
+  opacity:.92;
+}
+.metric-ico,
+.module-ico{
+  display:grid !important;
+  place-items:center !important;
+  color:#f0c66b !important;
+  background:
+    radial-gradient(circle at 35% 18%,rgba(240,198,107,.24),transparent 58%),
+    linear-gradient(180deg,rgba(216,182,111,.17),rgba(216,182,111,.04)) !important;
+  border:1px solid rgba(216,182,111,.20) !important;
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.05),0 12px 30px rgba(216,182,111,.07) !important;
+}
+.metric-ico svg{
+  width:24px !important;
+  height:24px !important;
+  stroke-width:1.7 !important;
+}
+.module-ico svg{
+  width:34px !important;
+  height:34px !important;
+  stroke-width:1.62 !important;
+}
+.quick-icon{
+  width:30px !important;
+  height:30px !important;
+  min-width:30px !important;
+  border-radius:10px !important;
+  display:grid !important;
+  place-items:center !important;
+  color:#f0c66b !important;
+  background:rgba(216,182,111,.075) !important;
+  border:1px solid rgba(216,182,111,.14) !important;
+}
+.quick-icon svg{
+  width:17px !important;
+  height:17px !important;
+  stroke-width:1.7 !important;
+}
+.quick-left{
+  gap:10px !important;
+}
+@media(max-width:820px){
+  .nav-ico{
+    width:30px !important;
+    height:30px !important;
+    min-width:30px !important;
+  }
+  .nav-ico svg{
+    width:19px !important;
+    height:19px !important;
+  }
+}
+
+
+
+/* Exchange reason + CRM exchange notes */
+.exchange-form-row{
+  display:grid;
+  grid-template-columns:minmax(180px,.8fr) minmax(180px,.8fr) auto;
+  gap:10px;
+  margin-top:14px;
+  align-items:end;
+}
+.exchange-notes-card{
+  min-height:220px;
+}
+.exchange-note{
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:rgba(255,255,255,.025);
+  padding:12px;
+  margin-bottom:10px;
+}
+.exchange-note-product{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-top:8px;
+  color:var(--muted);
+  font-size:13px;
+  line-height:1.4;
+}
+.changed-product-red{
+  color:#ff8a7a !important;
+  font-weight:850;
+}
+.exchange-arrow{
+  color:#d8b66f;
+}
+@media(max-width:820px){
+  .exchange-form-row{
+    grid-template-columns:1fr;
+  }
+  .exchange-note-product{
+    display:grid;
+    grid-template-columns:1fr;
+    gap:4px;
+  }
+  .exchange-arrow{
+    display:none;
+  }
+}
+
+
+
+/* CRM exchange notes pagination */
+.exchange-notes-pagination{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+  flex-wrap:wrap;
+  padding:12px 0 4px;
+}
+.exchange-notes-page-btn{
+  min-height:34px !important;
+  padding:7px 11px !important;
+}
+.exchange-notes-page-btn.active{
+  border-color:rgba(216,182,111,.58) !important;
+  color:#f0c66b !important;
+  background:rgba(216,182,111,.08) !important;
+}
+.exchange-notes-count{
+  text-align:center;
+  color:var(--muted);
+  font-size:12px;
+  padding:2px 0 4px;
+}
+@media(max-width:820px){
+  .exchange-notes-pagination{
+    justify-content:flex-start;
+  }
+  .exchange-notes-count{
+    text-align:left;
+  }
+}
+
+
+
+/* Exchange price difference + split quantity lines */
+.unit-chip{
+  display:inline-flex;
+  align-items:center;
+  margin-left:6px;
+  padding:2px 7px;
+  border-radius:999px;
+  color:#f0c66b;
+  background:rgba(216,182,111,.08);
+  border:1px solid rgba(216,182,111,.18);
+  font-size:11px;
+  font-weight:800;
+}
+.exchange-price-diff{
+  margin-top:8px;
+  border:1px solid var(--line);
+  border-radius:11px;
+  padding:8px 10px;
+  font-size:12px;
+  color:var(--muted);
+  background:rgba(255,255,255,.025);
+}
+.exchange-price-diff b{
+  font-weight:850;
+}
+.exchange-price-diff.pay-extra{
+  color:#ff8a7a;
+  border-color:rgba(255,138,122,.25);
+  background:rgba(255,138,122,.07);
+}
+.exchange-price-diff.money-left{
+  color:#77cc92;
+  border-color:rgba(119,204,146,.24);
+  background:rgba(119,204,146,.07);
+}
+.exchange-price-diff.price-even{
+  color:#f0c66b;
+  border-color:rgba(216,182,111,.24);
+  background:rgba(216,182,111,.06);
+}
+.price-muted{
+  color:var(--muted);
+}
+@media(max-width:820px){
+  .exchange-price-diff{
+    font-size:12px;
+    padding:8px;
+  }
+}
+
+
+
+/* Exchange product + separate variant selector */
+.exchange-pick-wrap{
+  display:grid;
+  grid-template-columns:minmax(0,1fr) minmax(190px,.75fr);
+  gap:10px;
+  align-items:start;
+}
+.exchange-variant-box{
+  display:grid;
+  gap:6px;
+}
+.exchange-variant-box label{
+  font-size:11px;
+  color:var(--muted);
+  font-weight:700;
+}
+.exchange-variant-select:disabled{
+  opacity:.55;
+}
+@media(max-width:820px){
+  .exchange-pick-wrap{
+    grid-template-columns:1fr !important;
+    gap:8px !important;
+  }
+  .exchange-variant-box{
+    width:100% !important;
+  }
+  .exchange-variant-select{
+    min-height:44px !important;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -4174,25 +4544,27 @@ function adminHtml(serverAdmin) {
     <aside class="sidebar">
       <div class="side-head"><div class="brand-mark" title="Ruth Istanbul"><img class="ruth-logo-img" src="/ruth-gold-r-logo.png" alt="Ruth Istanbul"></div><div class="brand-copy"><div class="brand-word">RUTH ISTANBUL</div></div></div>
       <nav class="nav">
-        <button class="nav-item active" data-route="overview"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10.5V20h5v-5h4v5h5v-9.5"/></svg></span><span class="nav-label">Genel Bakış</span></button>
+        <button class="nav-item active" data-route="overview"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg></span><span class="nav-label">Genel Bakış</span></button>
         <div class="nav-heading">İLETİŞİM</div>
-        <button class="nav-item" data-route="support"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M21 12a8 8 0 0 1-8 8H8l-5 3 1.8-5A8 8 0 1 1 21 12Z"/></svg></span><span class="nav-label">Canlı Destek</span><span id="badgeSupport" class="nav-badge">0</span></button>
-        <button class="nav-item" data-route="notifications"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M18 8a6 6 0 1 0-12 0c0 7-3 6-3 9h18c0-3-3-2-3-9Z"/><path d="M10 21h4"/></svg></span><span class="nav-label">Bildirimler</span><span id="badgeNotify" class="nav-badge">0</span></button>
+        <button class="nav-item" data-route="support"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5.5 6.5h13a2.5 2.5 0 0 1 2.5 2.5v5.7a2.5 2.5 0 0 1-2.5 2.5H11l-5.5 3.3v-3.3a2.5 2.5 0 0 1-2.5-2.5V9a2.5 2.5 0 0 1 2.5-2.5Z"/><path d="M8 10.5h8"/><path d="M8 13.5h5.5"/></svg></span><span class="nav-label">Canlı Destek</span><span id="badgeSupport" class="nav-badge">0</span></button>
+        <button class="nav-item" data-route="notifications"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M18 10.2a6 6 0 0 0-12 0c0 4.8-2.4 5.6-3 7.3h18c-.6-1.7-3-2.5-3-7.3Z"/><path d="M10 20h4"/><path d="M9.2 4.4a4.6 4.6 0 0 1 5.6 0"/></svg></span><span class="nav-label">Bildirimler</span><span id="badgeNotify" class="nav-badge">0</span></button>
         <div class="nav-heading">MÜŞTERİ YÖNETİMİ</div>
-        <button class="nav-item" data-route="crm"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M20 21a8 8 0 0 0-16 0"/><circle cx="12" cy="8" r="4"/></svg></span><span class="nav-label">CRM</span></button>
+        <button class="nav-item" data-route="crm"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="9" cy="8.5" r="3.2"/><path d="M3.7 20a5.3 5.3 0 0 1 10.6 0"/><circle cx="17.2" cy="9.8" r="2.5"/><path d="M15.4 15.2a4.5 4.5 0 0 1 5.6 4.2"/></svg></span><span class="nav-label">CRM</span></button>
+        <button class="nav-item" data-route="exchange"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M7 7.5h11"/><path d="m15 4.5 3 3-3 3"/><path d="M17 16.5H6"/><path d="m9 13.5-3 3 3 3"/></svg></span><span class="nav-label">Değişim Yap</span></button>
+        <button class="nav-item" data-route="return"><span class="nav-ico return-nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20 7.5v5.2a5.3 5.3 0 0 1-5.3 5.3H6.5"/><path d="m9.2 14.2-3.5 3.8 3.5 3.7"/><path d="M4 7.5h9.8a4.2 4.2 0 0 1 4.2 4.2"/></svg></span><span class="nav-label">İade Yap</span></button>
         <div class="nav-heading">SİPARİŞ YÖNETİMİ</div>
-        <button class="nav-item" data-route="orders"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M6 7h12l1 14H5L6 7Z"/><path d="M9 7a3 3 0 0 1 6 0"/></svg></span><span class="nav-label">Siparişler</span><span id="badgeOrders" class="nav-badge">0</span></button>
-        <button class="nav-item" data-route="ikas-ready-orders"><span class="nav-ico">↳</span><span class="nav-label">Hazırlanacak Siparişler</span><span id="badgeReadyOrders" class="nav-badge">0</span></button>
-        <button class="nav-item" data-route="ikas-ready-products"><span class="nav-ico">↳</span><span class="nav-label">Hazırlanacak Ürün Toplamları</span></button>
-        <button class="nav-item" data-route="products"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="m21 8-9-5-9 5 9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/><path d="M12 13v8"/></svg></span><span class="nav-label">Ürünler</span></button>
+        <button class="nav-item" data-route="orders"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6.6 7.4h10.8l1.2 13.1H5.4L6.6 7.4Z"/><path d="M9 7.4a3 3 0 0 1 6 0"/><path d="M9 12h6"/><path d="M9 15.3h4.8"/></svg></span><span class="nav-label">Siparişler</span><span id="badgeOrders" class="nav-badge">0</span></button>
+        <button class="nav-item" data-route="ikas-ready-orders"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="5" y="3.8" width="14" height="17" rx="2.2"/><path d="M9 8h6"/><path d="M9 11.5h4.4"/><path d="m9 16 2 2 4.6-5"/></svg></span><span class="nav-label">Hazırlanacak Siparişler</span><span id="badgeReadyOrders" class="nav-badge">0</span></button>
+        <button class="nav-item" data-route="ikas-ready-products"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4.3 8 12 4l7.7 4-7.7 4-7.7-4Z"/><path d="M4.3 8v8l7.7 4 7.7-4V8"/><path d="M12 12v8"/><path d="m16 14.2 1.5 1.5 3.2-3.5"/></svg></span><span class="nav-label">Hazırlanacak Ürün Toplamları</span></button>
+        <button class="nav-item" data-route="products"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 3.5 20 8l-8 4.5L4 8l8-4.5Z"/><path d="M4 8v8.2l8 4.3 8-4.3V8"/><path d="M12 12.5v8"/><path d="m8.2 5.9 8 4.5"/></svg></span><span class="nav-label">Ürünler</span></button>
         <div class="nav-heading">ENTEGRASYON</div>
-        <button class="nav-item" data-route="integration"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.1 0l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1 0l-2 2A5 5 0 0 0 12 20.1l1.1-1.1"/></svg></span><span class="nav-label">ikas Entegrasyonu</span></button>
-        <button class="nav-item" data-route="ikas-orders"><span class="nav-ico">↳</span><span class="nav-label">Tüm Siparişler</span></button>
-        <button class="nav-item" data-route="ikas-products"><span class="nav-ico">↳</span><span class="nav-label">Tüm Ürünler</span></button>
-        <button class="nav-item" data-route="ikas-collections"><span class="nav-ico">↳</span><span class="nav-label">Tüm Koleksiyonlar</span></button>
+        <button class="nav-item" data-route="integration"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M8.2 12.8 6.8 14.2a3.8 3.8 0 1 1-5.4-5.4L4 6.2a3.8 3.8 0 0 1 5.4 0"/><path d="M15.8 11.2l1.4-1.4a3.8 3.8 0 1 1 5.4 5.4L20 17.8a3.8 3.8 0 0 1-5.4 0"/><path d="M8.5 15.5 15.5 8.5"/></svg></span><span class="nav-label">ikas Entegrasyonu</span></button>
+        <button class="nav-item" data-route="ikas-orders"><span class="nav-ico sub"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 5v9.5A4.5 4.5 0 0 0 10.5 19H19"/><path d="m15.5 15.5 3.5 3.5-3.5 3.5"/></svg></span><span class="nav-label">Tüm Siparişler</span></button>
+        <button class="nav-item" data-route="ikas-products"><span class="nav-ico sub"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 5v9.5A4.5 4.5 0 0 0 10.5 19H19"/><path d="m15.5 15.5 3.5 3.5-3.5 3.5"/><path d="M9 8.5h6"/></svg></span><span class="nav-label">Tüm Ürünler</span></button>
+        <button class="nav-item" data-route="ikas-collections"><span class="nav-ico sub"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M6 5v9.5A4.5 4.5 0 0 0 10.5 19H19"/><path d="m15.5 15.5 3.5 3.5-3.5 3.5"/><path d="M9 8h6"/><path d="M9 11h4"/></svg></span><span class="nav-label">Tüm Koleksiyonlar</span></button>
         <div class="nav-heading">DİĞER</div>
-        <button class="nav-item" data-route="reports"><span class="nav-ico"><svg viewBox="0 0 24 24"><path d="M4 19V9"/><path d="M10 19V5"/><path d="M16 19v-7"/><path d="M22 19H2"/></svg></span><span class="nav-label">Raporlar</span></button>
-        <button class="nav-item" data-route="settings"><span class="nav-ico"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1-2.1 2.1-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V20h-3v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1L6.6 16.7l.1-.1A1.7 1.7 0 0 0 7 14.7a1.7 1.7 0 0 0-1.5-1H5v-3h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1 2.1-2.1.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.5V4h3v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1 2.1 2.1-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.5 1h.1v3h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span><span class="nav-label">Ayarlar</span></button>
+        <button class="nav-item" data-route="reports"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M4 19.5V10"/><path d="M10 19.5V5"/><path d="M16 19.5v-7.5"/><path d="M22 19.5H2"/></svg></span><span class="nav-label">Raporlar</span></button>
+        <button class="nav-item" data-route="settings"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3"/><path d="M19.5 14.7a1.8 1.8 0 0 0 .3 2l.1.1-2.3 2.3-.1-.1a1.8 1.8 0 0 0-2-.3 1.8 1.8 0 0 0-1.1 1.6v.2h-4.8v-.2a1.8 1.8 0 0 0-1.1-1.6 1.8 1.8 0 0 0-2 .3l-.1.1-2.3-2.3.1-.1a1.8 1.8 0 0 0 .3-2 1.8 1.8 0 0 0-1.6-1.1h-.2V10h.2a1.8 1.8 0 0 0 1.6-1.1 1.8 1.8 0 0 0-.3-2l-.1-.1 2.3-2.3.1.1a1.8 1.8 0 0 0 2 .3 1.8 1.8 0 0 0 1.1-1.6v-.2h4.8v.2a1.8 1.8 0 0 0 1.1 1.6 1.8 1.8 0 0 0 2-.3l.1-.1 2.3 2.3-.1.1a1.8 1.8 0 0 0-.3 2 1.8 1.8 0 0 0 1.6 1.1h.2v3.6h-.2a1.8 1.8 0 0 0-1.6 1.1Z"/></svg></span><span class="nav-label">Ayarlar</span></button>
       </nav>
       <div class="side-foot"><button id="collapseBtn" class="btn ghost"><span>←</span><span>Menüyü Daralt</span></button><button id="logoutBtn" class="btn ghost"><span>Çıkış Yap</span></button></div>
     </aside>
@@ -4208,15 +4580,15 @@ function adminHtml(serverAdmin) {
             <div>
               <div class="welcome"><div><h1>Hoş geldiniz, <span id="welcomeUser">Yönetici</span> 👋</h1><p>İşletmenizin tüm verilerine genel bakış.</p></div><div class="date-filter" data-date-filter><select class="date-select" data-date-preset><option value="today">Bugün</option><option value="yesterday">Dün</option><option value="this_week">Bu hafta</option><option value="last_week">Geçen hafta</option><option value="this_month">Bu ay</option><option value="last_month">Geçen ay</option><option value="this_year">Bu yıl</option><option value="custom">Özel tarih</option><option value="all">Tüm zamanlar</option></select><div class="date-custom"><input class="date-input" type="date" data-date-start><span class="time">-</span><input class="date-input" type="date" data-date-end></div></div></div>
               <div class="metrics">
-                <div class="metric route-card" data-route="support" role="button" tabindex="0" aria-label="Açık konuşmalara git"><div class="metric-row"><div class="metric-ico">☏</div><div><div class="metric-label">Açık Konuşmalar</div><div id="statOpen" class="metric-num">0</div></div></div><div class="metric-sub">+0 bugün</div></div>
-                <div class="metric route-card" data-route="support" role="button" tabindex="0" aria-label="Okunmamış mesajlara git"><div class="metric-row"><div class="metric-ico">✉</div><div><div class="metric-label">Okunmamış Mesajlar</div><div id="statUnread" class="metric-num">0</div></div></div><div class="metric-sub">+0 bugün</div></div>
-                <div class="metric route-card" data-route="crm" role="button" tabindex="0" aria-label="CRM hatırlatmalarına git"><div class="metric-row"><div class="metric-ico">▣</div><div><div class="metric-label">Bugünkü Hatırlatmalar</div><div id="statReminders" class="metric-num">0</div></div></div><div class="metric-sub">CRM görevleri</div></div>
-                <div class="metric route-card" data-route="ikas-orders" role="button" tabindex="0" aria-label="Tüm siparişlere git"><div class="metric-row"><div class="metric-ico">♧</div><div><div class="metric-label">Toplam Sipariş</div><div id="statOrders" class="metric-num">0</div></div></div><div class="metric-sub">ikas bağlanınca canlı</div></div>
+                <div class="metric route-card" data-route="support" role="button" tabindex="0" aria-label="Açık konuşmalara git"><div class="metric-row"><div class="metric-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.8h14a2 2 0 0 1 2 2v6.4a2 2 0 0 1-2 2H10l-5 3v-3H5a2 2 0 0 1-2-2V8.8a2 2 0 0 1 2-2Z"/><path d="M7.5 10.5h9"/><path d="M7.5 13.5h6"/></svg></div><div><div class="metric-label">Açık Konuşmalar</div><div id="statOpen" class="metric-num">0</div></div></div><div class="metric-sub">+0 bugün</div></div>
+                <div class="metric route-card" data-route="support" role="button" tabindex="0" aria-label="Okunmamış mesajlara git"><div class="metric-row"><div class="metric-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 9a6 6 0 1 0-12 0c0 5.4-2.4 6.1-3 8h18c-.6-1.9-3-2.6-3-8Z"/><path d="M10 20.5h4"/></svg></div><div><div class="metric-label">Okunmamış Mesajlar</div><div id="statUnread" class="metric-num">0</div></div></div><div class="metric-sub">+0 bugün</div></div>
+                <div class="metric route-card" data-route="crm" role="button" tabindex="0" aria-label="CRM hatırlatmalarına git"><div class="metric-row"><div class="metric-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="6.5"/><path d="M12 9v4l2.5 1.6"/><path d="M6 4 3.5 6.5"/><path d="M18 4l2.5 2.5"/></svg></div><div><div class="metric-label">Bugünkü Hatırlatmalar</div><div id="statReminders" class="metric-num">0</div></div></div><div class="metric-sub">CRM görevleri</div></div>
+                <div class="metric route-card" data-route="ikas-orders" role="button" tabindex="0" aria-label="Tüm siparişlere git"><div class="metric-row"><div class="metric-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 7.5h11l1.1 13h-13.2l1.1-13Z"/><path d="M9 7.5a3 3 0 0 1 6 0"/><path d="M9 12h6"/><path d="M9 15.5h4"/></svg></div><div><div class="metric-label">Toplam Sipariş</div><div id="statOrders" class="metric-num">0</div></div></div><div class="metric-sub">ikas bağlanınca canlı</div></div>
               </div>
               <div class="modules">
-                <button class="module route-card" type="button" data-route="support"><div class="module-ico">☏</div><h3>CANLI DESTEK</h3><p>Müşterilerinizle anlık olarak iletişime geçin ve destek verin.</p><span class="btn gold">Konuşmaları Görüntüle →</span></button>
-                <button class="module route-card" type="button" data-route="crm"><div class="module-ico">♙</div><h3>CRM</h3><p>Müşteri bilgileri, notlar ve hatırlatmaları yönetin.</p><span class="btn gold">CRM'ye Git →</span></button>
-                <button class="module route-card" type="button" data-route="orders"><div class="module-ico">♧</div><h3>SİPARİŞLER</h3><p>Gelen siparişleri, ürünleri ve istatistikleri görüntüleyin.</p><span class="btn gold">Siparişleri Görüntüle →</span></button>
+                <button class="module route-card" type="button" data-route="support"><div class="module-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 6.8h14a2 2 0 0 1 2 2v6.4a2 2 0 0 1-2 2H10l-5 3v-3H5a2 2 0 0 1-2-2V8.8a2 2 0 0 1 2-2Z"/><path d="M7.5 10.5h9"/><path d="M7.5 13.5h6"/></svg></div><h3>CANLI DESTEK</h3><p>Müşterilerinizle anlık olarak iletişime geçin ve destek verin.</p><span class="btn gold">Konuşmaları Görüntüle →</span></button>
+                <button class="module route-card" type="button" data-route="crm"><div class="module-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 20a5 5 0 0 0-10 0"/><circle cx="12" cy="8" r="3.2"/><path d="M18.5 10.2c1.7.4 3 1.8 3.5 3.6"/><path d="M5.5 10.2c-1.7.4-3 1.8-3.5 3.6"/></svg></div><h3>CRM</h3><p>Müşteri bilgileri, notlar ve hatırlatmaları yönetin.</p><span class="btn gold">CRM'ye Git →</span></button>
+                <button class="module route-card" type="button" data-route="orders"><div class="module-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 7.5h11l1.1 13h-13.2l1.1-13Z"/><path d="M9 7.5a3 3 0 0 1 6 0"/><path d="M9 12h6"/><path d="M9 15.5h4"/></svg></div><h3>SİPARİŞLER</h3><p>Gelen siparişleri, ürünleri ve istatistikleri görüntüleyin.</p><span class="btn gold">Siparişleri Görüntüle →</span></button>
               </div>
               <div class="bottom-grid">
                 <div class="card"><div class="card-title">Son Konuşmalar</div><div id="recentConversations" class="list"><div class="empty">Yükleniyor...</div></div><button class="btn full" data-route="support">Tüm Konuşmaları Görüntüle</button></div>
@@ -4226,7 +4598,7 @@ function adminHtml(serverAdmin) {
               <div class="footer-logo">RUTH ISTANBUL</div>
             </div>
             <aside class="right-rail">
-              <div class="card"><div class="card-title">Hızlı Erişim</div><div class="list"><button class="quick-row" data-route="crm"><span class="quick-left"><span>✎</span><span>Yeni Not Ekle</span></span><span>›</span></button><button class="quick-row" data-route="crm"><span class="quick-left"><span>▣</span><span>Hatırlatma Oluştur</span></span><span>›</span></button><button class="quick-row" data-route="crm"><span class="quick-left"><span>♙</span><span>Yeni Müşteri Ekle</span></span><span>›</span></button><button id="quickSync" class="quick-row"><span class="quick-left"><span>↻</span><span>Siparişleri Senkronize Et</span></span><span>›</span></button></div></div>
+              <div class="card"><div class="card-title">Hızlı Erişim</div><div class="list"><button class="quick-row" data-route="crm"><span class="quick-left"><span class="quick-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4h9l3 3v13H6z"/><path d="M15 4v4h4"/><path d="M8.5 12h7"/><path d="M8.5 15h5"/></svg></span><span>Yeni Not Ekle</span></span><span>›</span></button><button class="quick-row" data-route="crm"><span class="quick-left"><span class="quick-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="13" r="6.5"/><path d="M12 9v4l2.5 1.6"/><path d="M6 4 3.5 6.5"/><path d="M18 4l2.5 2.5"/></svg></span><span>Hatırlatma Oluştur</span></span><span>›</span></button><button class="quick-row" data-route="crm"><span class="quick-left"><span class="quick-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M17 20a5 5 0 0 0-10 0"/><circle cx="12" cy="8" r="3.2"/><path d="M18.5 10.2c1.7.4 3 1.8 3.5 3.6"/><path d="M5.5 10.2c-1.7.4-3 1.8-3.5 3.6"/></svg></span><span>Yeni Müşteri Ekle</span></span><span>›</span></button><button id="quickSync" class="quick-row"><span class="quick-left"><span class="quick-icon"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 13.5 7.8 15a3.6 3.6 0 1 1-5.1-5.1l2.5-2.5a3.6 3.6 0 0 1 5.1 0"/><path d="m14.5 10.5 1.7-1.5a3.6 3.6 0 1 1 5.1 5.1l-2.5 2.5a3.6 3.6 0 0 1-5.1 0"/><path d="M8.8 15.2 15.2 8.8"/></svg></span><span>Siparişleri Senkronize Et</span></span><span>›</span></button></div></div>
               <div class="card"><div class="card-title">En Çok Satan Ürünler</div><div id="topProducts" class="list"><div class="empty">ikas API bağlanınca ürünler burada görünecek.</div></div><button class="btn full" data-route="orders">Tüm Ürünleri Görüntüle →</button></div>
             </aside>
           </div>
@@ -4243,7 +4615,7 @@ function adminHtml(serverAdmin) {
           <div class="crm-grid crm-grid-v2">
             <div class="panel"><div class="panel-head"><div><div class="panel-title">Tüm Müşteriler</div><div class="preview">ikas siparişlerinden gelen müşteri listesi</div></div><input id="ikasCustomerSearch" class="input" placeholder="Müşteri ara..." style="max-width:180px"></div><div id="ikasCustomers" class="panel-body"><div class="empty">ikas müşterileri yükleniyor...</div></div></div>
             <div class="panel"><div class="panel-head"><div><div class="panel-title">Canlı Destek Müşteriler</div><div class="preview">Siteden yazan müşteriler</div></div><input id="crmSearch" class="input" placeholder="Müşteri ara..." style="max-width:180px"></div><div id="customers" class="panel-body"><div class="empty">Yükleniyor...</div></div></div>
-            <div class="panel crm-detail-panel"><div class="panel-head"><div><div id="crmTitle" class="panel-title">Müşteri seç</div><div id="crmSub" class="preview">Özel not eklemek için canlı destek müşterisi seç.</div></div></div><div class="panel-body"><div class="bottom-grid"><div class="card"><div class="info-line"><span>Telefon</span><b id="crmPhone">-</b></div><div class="info-line"><span>Durum</span><b id="crmStatus">-</b></div><div class="info-line"><span>Son Mesaj</span><b id="crmLast">-</b></div></div><form id="noteForm" class="card"><div class="card-title">Müşteriye Özel Not</div><textarea id="noteText" class="textarea" placeholder="Bu müşteri hakkında not yaz..." disabled></textarea><div class="field"><label>Hatırlatma zamanı</label><input id="noteReminder" class="input" type="datetime-local" disabled></div><button id="noteBtn" class="btn gold full" disabled>Notu Kaydet</button></form><div class="card"><div class="card-title">Kayıtlar</div><div id="notesList" class="list"><div class="empty">Canlı destek müşterisi seç.</div></div></div></div></div></div>
+            <div class="panel crm-detail-panel"><div class="panel-head"><div><div id="crmTitle" class="panel-title">Müşteri seç</div><div id="crmSub" class="preview">Özel not eklemek için canlı destek müşterisi seç.</div></div></div><div class="panel-body"><div class="bottom-grid"><div class="card"><div class="info-line"><span>Telefon</span><b id="crmPhone">-</b></div><div class="info-line"><span>Durum</span><b id="crmStatus">-</b></div><div class="info-line"><span>Son Mesaj</span><b id="crmLast">-</b></div></div><form id="noteForm" class="card"><div class="card-title">Müşteriye Özel Not</div><textarea id="noteText" class="textarea" placeholder="Bu müşteri hakkında not yaz..." disabled></textarea><div class="field"><label>Hatırlatma zamanı</label><input id="noteReminder" class="input" type="datetime-local" disabled></div><button id="noteBtn" class="btn gold full" disabled>Notu Kaydet</button></form><div class="card"><div class="card-title">Kayıtlar</div><div id="notesList" class="list"><div class="empty">Canlı destek müşterisi seç.</div></div></div><div class="card exchange-notes-card"><div class="card-title">Değişim Notları</div><div id="exchangeNotesList" class="list"><div class="empty">Henüz değişim kaydı yok.</div></div></div></div></div></div>
           </div>
         </div>
 
@@ -4267,7 +4639,7 @@ function adminHtml(serverAdmin) {
         <div id="page-integration" class="page">
           <div class="page-head"><div><div class="page-title">ikas Entegrasyonu</div><div class="page-sub">Sipariş, ürün, koleksiyon ve hazırlık listelerini ayrı ayrı yönet.</div></div><button class="btn gold" data-route="ikas-orders">Tüm Siparişler →</button></div>
           <div class="modules">
-            <button class="module" data-route="ikas-orders"><div class="module-ico">♧</div><h3>TÜM SİPARİŞLER</h3><p>En güncel siparişler en üstte, durumları ve ürünleriyle görünür.</p><span class="btn gold">Aç →</span></button>
+            <button class="module" data-route="ikas-orders"><div class="module-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 7.5h11l1.1 13h-13.2l1.1-13Z"/><path d="M9 7.5a3 3 0 0 1 6 0"/><path d="M9 12h6"/><path d="M9 15.5h4"/></svg></div><h3>TÜM SİPARİŞLER</h3><p>En güncel siparişler en üstte, durumları ve ürünleriyle görünür.</p><span class="btn gold">Aç →</span></button>
             <button class="module" data-route="ikas-products"><div class="module-ico">◇</div><h3>TÜM ÜRÜNLER</h3><p>Ürün adı, fotoğraf, varyant, SKU ve stok bilgileri.</p><span class="btn gold">Aç →</span></button>
             <button class="module" data-route="ikas-collections"><div class="module-ico">▣</div><h3>TÜM KOLEKSİYONLAR</h3><p>ikas kategori/koleksiyonları ve içindeki ürünler.</p><span class="btn gold">Aç →</span></button>
             <button class="module" data-route="ikas-ready-orders"><div class="module-ico">✓</div><h3>HAZIRLANACAK SİPARİŞLER</h3><p>Sadece kargoya hazır siparişler.</p><span class="btn gold">Aç →</span></button>
@@ -4294,7 +4666,7 @@ function adminHtml(serverAdmin) {
 <script>
 (function(){
   var token=localStorage.getItem('ruth_admin_token')||'';
-  var conversations=[]; var reminders=[]; var exchangeRecords=[]; var returnRecords=[]; var selectedExchangeCustomerKey=''; var selectedReturnOrderId=''; var expandedIkasCustomerKey=''; var exchangeCustomerPage=1; var returnOrdersPage=1; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null; var ikasLoading=false; var ikasAutoTimer=null; var ikasConnecting=false; var ikasConnectedFast=false; var ikasStableStatus='Bağlanıyor'; var selectedAdminImage=null;
+  var conversations=[]; var reminders=[]; var exchangeRecords=[]; var returnRecords=[]; var selectedExchangeCustomerKey=''; var selectedReturnOrderId=''; var expandedIkasCustomerKey=''; var exchangeCustomerPage=1; var returnOrdersPage=1; var exchangeNotesPage=1; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null; var ikasLoading=false; var ikasAutoTimer=null; var ikasConnecting=false; var ikasConnectedFast=false; var ikasStableStatus='Bağlanıyor'; var selectedAdminImage=null;
   var storedDatePreset=localStorage.getItem('ruth_panel_date_preset'); var datePreset=storedDatePreset||'today'; if(!localStorage.getItem('ruth_panel_date_default_today_v18')){datePreset='today'; localStorage.setItem('ruth_panel_date_preset','today'); localStorage.setItem('ruth_panel_date_default_today_v18','1')} var dateStart=localStorage.getItem('ruth_panel_date_start')||''; var dateEnd=localStorage.getItem('ruth_panel_date_end')||''; var ordersPage=1; var allOrdersPage=1; var deliveredOrdersPage=1; var orderSearch=''; var productSearch='';
   var ISTANBUL_TZ='Europe/Istanbul'; var TR_OFFSET_MS=3*60*60*1000;
   function $(id){return document.getElementById(id)}
@@ -4440,7 +4812,7 @@ function adminHtml(serverAdmin) {
 
   function loadConversations(silent){ return api('/api/admin/conversations').then(function(d){conversations=d.conversations||[]; renderAll(); if(activeId){ if(activeRoute==='support')loadMessages(activeId,true); if(activeRoute==='crm')loadCrmDetail(activeId,true); }}).catch(function(err){if(!silent)toast(err.message)})}
   function loadReminders(){return api('/api/admin/reminders/due').then(function(d){reminders=d.reminders||[]; renderReminders()}).catch(function(){})}
-  function loadExchangeRecords(){return api('/api/admin/exchanges').then(function(d){exchangeRecords=d.exchanges||[]; renderIkas(); renderIkasCustomers(); renderExchange();}).catch(function(){exchangeRecords=[]})}
+  function loadExchangeRecords(){return api('/api/admin/exchanges').then(function(d){exchangeRecords=d.exchanges||[]; renderIkas(); renderIkasCustomers(); renderExchange(); renderExchangeNotes();}).catch(function(){exchangeRecords=[]})}
   function loadReturnRecords(){return api('/api/admin/returns').then(function(d){returnRecords=d.returns||[]; renderIkas(); renderReturn();}).catch(function(){returnRecords=[]})}
   function ikasHasVisibleData(s){
     return Boolean(s && (((s.orders||[]).length) || ((s.products||[]).length) || ((s.collections||[]).length) || ((s.readyOrders||[]).length) || ((s.readyProductTotals||[]).length)));
@@ -4558,7 +4930,7 @@ function adminHtml(serverAdmin) {
     });
   }
   function itemInDate(value){if(datePreset==='all')return true; var t=Date.parse(value||''); if(!t)return false; var r=activeDateRange(); return t>=r.start&&t<r.end}
-  function renderAll(){ var datedConversations=conversations.filter(function(c){return itemInDate(c.updatedAt||c.lastCustomerMessageAt||c.createdAt)}); var open=datedConversations.filter(function(c){return c.status!=='closed'}).length; var unread=datedConversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0); var datedReminders=reminders.filter(function(r){return itemInDate(r.reminderAt||r.createdAt)}); setText('statOpen',open); setText('statUnread',unread); setText('statReminders',datedReminders.length); setText('badgeSupport',conversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0)); setText('topBadge',unread); renderRecent(); renderConversations(); renderCustomers(); renderIkasCustomers(); renderExchange(); renderReturn(); renderReminders(); }
+  function renderAll(){ var datedConversations=conversations.filter(function(c){return itemInDate(c.updatedAt||c.lastCustomerMessageAt||c.createdAt)}); var open=datedConversations.filter(function(c){return c.status!=='closed'}).length; var unread=datedConversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0); var datedReminders=reminders.filter(function(r){return itemInDate(r.reminderAt||r.createdAt)}); setText('statOpen',open); setText('statUnread',unread); setText('statReminders',datedReminders.length); setText('badgeSupport',conversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0)); setText('topBadge',unread); renderRecent(); renderConversations(); renderCustomers(); renderIkasCustomers(); renderExchange(); renderReturn(); renderExchangeNotes(); renderReminders(); }
   function renderRecent(){ var el=$('recentConversations'); if(!el)return; var items=conversations.slice(0,4); if(!items.length){el.innerHTML='<div class="empty">Henüz konuşma yok.</div>';return;} el.innerHTML=items.map(function(c){return '<div class="mini-row"><div class="row"><div class="name">'+escapeHtml(c.displayName||'Ziyaretçi')+'</div><span class="time">'+fmtDate(c.updatedAt)+'</span></div><div class="preview">'+escapeHtml(c.lastMessageText||'Yeni konuşma')+'</div></div>'}).join('') }
   function renderReminders(){var datedReminders=reminders.filter(function(r){return itemInDate(r.reminderAt||r.createdAt)}); setText('statReminders',datedReminders.length); setText('badgeNotify',reminders.length); var el=$('remindersList'); if(!el)return; if(!datedReminders.length){el.innerHTML='<div class="empty">Seçili tarihte bekleyen hatırlatma yok.</div>';return;} el.innerHTML=datedReminders.slice(0,4).map(function(n){return '<div class="mini-row"><div class="row"><div class="name">'+escapeHtml(n.body||'Hatırlatma')+'</div><span class="time">□</span></div><div class="preview">'+fmtDate(n.reminderAt)+'</div></div>'}).join('')}
   function filteredConversations(){ var term=(($('searchInput')&&$('searchInput').value)||($('crmSearch')&&$('crmSearch').value)||'').toLowerCase(); if(!term)return conversations; return conversations.filter(function(c){return [c.displayName,c.visitorPhone,c.lastMessageText,c.pageTitle].join(' ').toLowerCase().indexOf(term)>=0}) }
@@ -4662,24 +5034,32 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
   }
   function productPickerHtml(){
     var products=ikasSummary.products||[];
-    var choices=[];
-    products.forEach(function(p){
+    var choices=products.map(function(p){
       var variants=(p.variants&&p.variants.length)?p.variants:[{}];
-      variants.forEach(function(v,idx){
-        var sku=v.sku||'';
-        var variantText=v.variantText||v.name||'';
-        var small=[variantText,sku?('SKU: '+sku):''].filter(Boolean).join(' • ') || (variants.length>1?('Varyant '+(idx+1)):'Tek varyant');
-        choices.push('<button type="button" class="exchange-product-choice" data-product-id="'+escapeHtml(p.id||p.name||'')+'" data-variant-id="'+escapeHtml(v.id||'')+'" data-product-name="'+escapeHtml(p.name||'Ürün')+'" data-variant-text="'+escapeHtml(variantText||'')+'" data-product-sku="'+escapeHtml(sku||'')+'" data-product-image="'+escapeHtml(p.image||'')+'">'+imgHtml(p.image,'')+'<span><b>'+escapeHtml(p.name||'Ürün')+'</b><small>'+escapeHtml(small)+'</small></span></button>');
-      });
-    });
-    return '<div class="exchange-product-picker"><input type="hidden" class="exchange-product-value"><input type="hidden" class="exchange-variant-value"><input type="hidden" class="exchange-product-name"><input type="hidden" class="exchange-variant-text"><input type="hidden" class="exchange-product-sku"><button type="button" class="exchange-product-trigger">'+imgHtml('', '')+'<span class="pick-copy"><b>Yeni ürün / varyant seç</b><small>Fotoğrafıyla görmek için tıkla</small></span><span>⌄</span></button><div class="exchange-product-menu">'+(choices.join('')||'<div class="empty">Ürün verisi yok. Önce ikas senkronize et.</div>')+'</div></div>';
+      var prices=variants.map(variantPrice).filter(function(x){return Number(x)>0});
+      var minPrice=prices.length?Math.min.apply(null,prices):0;
+      var maxPrice=prices.length?Math.max.apply(null,prices):0;
+      var priceText=minPrice?(minPrice===maxPrice?money(minPrice):(money(minPrice)+' - '+money(maxPrice))):'Fiyat yok';
+      var variantText=variants.length>1?(variants.length+' varyant'):'Tek varyant';
+      return '<button type="button" class="exchange-product-choice" data-product-id="'+escapeHtml(p.id||p.name||'')+'" data-product-name="'+escapeHtml(p.name||'Ürün')+'" data-product-image="'+escapeHtml(p.image||'')+'">'+imgHtml(p.image,'')+'<span><b>'+escapeHtml(p.name||'Ürün')+'</b><small>'+escapeHtml(variantText+' • '+priceText)+'</small></span></button>';
+    }).join('');
+    return '<div class="exchange-pick-wrap"><div class="exchange-product-picker"><input type="hidden" class="exchange-product-value"><input type="hidden" class="exchange-product-name"><button type="button" class="exchange-product-trigger">'+imgHtml('', '')+'<span class="pick-copy"><b>Ürün seç</b><small>Fotoğraf + ürün fiyatı</small></span><span>⌄</span></button><div class="exchange-product-menu">'+(choices||'<div class="empty">Ürün verisi yok. Önce ikas senkronize et.</div>')+'</div></div><div class="exchange-variant-box"><label>Varyant</label><select class="input exchange-variant-select" disabled><option value="">Önce ürün seç</option></select><input type="hidden" class="exchange-variant-value"><input type="hidden" class="exchange-variant-text"><input type="hidden" class="exchange-product-sku"><input type="hidden" class="exchange-product-price"></div></div>';
   }
   function exchangeOrderCard(o){
     var rec=orderExchangeRecord(o);
-    var lines=(o.items||[]).map(function(i,idx){
-      return '<div class="exchange-line" data-line-id="'+escapeHtml(i.id||idx)+'">'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+'× '+Number(i.quantity||0)+'</div></div>'+productPickerHtml()+'</div>';
-    }).join('');
-    return '<div class="exchange-order-card" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+' — '+escapeHtml(o.customer||'')+(rec?'<span class="exchange-chip">Değişim yapıldı</span>':'')+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.packageStatus||o.status||'')+'</div></div><span class="badge '+(rec?'exchange-done':'')+'">'+(rec?'Değişim yapıldı':escapeHtml(o.packageStatus||o.status||'Yeni'))+'</span></div>'+lines+'<div class="exchange-reminder"><div class="field"><label>Değişim hatırlatma zamanı</label><input class="input exchange-reminder-at" type="datetime-local" value="'+escapeHtml(rec&&rec.reminderAt?String(rec.reminderAt).slice(0,16):'')+'"></div><button class="btn gold exchange-save" data-order-id="'+escapeHtml(o.id)+'">Değişimi Kaydet</button></div></div>';
+    var lines=[];
+    (o.items||[]).forEach(function(i,idx){
+      var qty=Math.max(1,Number(i.quantity||1));
+      for(var unit=1; unit<=qty; unit++){
+        var lineId=String(i.id||idx)+'::'+unit;
+        var unitLabel=qty>1?' <span class="unit-chip">'+unit+'. ürün</span>':'';
+        var oldPrice=Number(i.unitPrice||0);
+        lines.push('<div class="exchange-line" data-line-id="'+escapeHtml(lineId)+'" data-base-line-id="'+escapeHtml(i.id||idx)+'" data-unit-index="'+unit+'" data-old-price="'+escapeHtml(oldPrice)+'">'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+unitLabel+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+'Eski fiyat: '+money(oldPrice)+'</div></div><div>'+productPickerHtml()+'<div class="exchange-price-diff"><span class="price-muted">Yeni ürün seçince fiyat farkı görünür</span></div></div></div>');
+      }
+    });
+    lines=lines.join('');
+    var reasonOptions=['Kararma','Yeşil iz bırakma','Zincir Kopması'].map(function(r){return '<option value="'+escapeHtml(r)+'" '+(rec&&rec.reason===r?'selected':'')+'>'+escapeHtml(r)+'</option>'}).join('');
+    return '<div class="exchange-order-card" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+' — '+escapeHtml(o.customer||'')+(rec?'<span class="exchange-chip">Değişim yapıldı</span>':'')+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.packageStatus||o.status||'')+'</div></div><span class="badge '+(rec?'exchange-done':'')+'">'+(rec?'Değişim yapıldı':escapeHtml(o.packageStatus||o.status||'Yeni'))+'</span></div>'+lines+'<div class="exchange-form-row"><div class="field"><label>Değişim nedeni</label><select class="input exchange-reason"><option value="">Sebep seç</option>'+reasonOptions+'</select></div><div class="field"><label>Değişim hatırlatma zamanı</label><input class="input exchange-reminder-at" type="datetime-local" value="'+escapeHtml(rec&&rec.reminderAt?String(rec.reminderAt).slice(0,16):'')+'"></div><button class="btn gold exchange-save" data-order-id="'+escapeHtml(o.id)+'">Değişimi Kaydet</button></div></div>';
   }
   function saveExchangeForOrder(orderId){
     var orders=ikasSummary.orders||[];
@@ -4693,17 +5073,95 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
       var name=line.querySelector('.exchange-product-name');
       var variantText=line.querySelector('.exchange-variant-text');
       var sku=line.querySelector('.exchange-product-sku');
+      var priceInput=line.querySelector('.exchange-product-price');
       if(!val||!val.value)return;
       var lineId=line.getAttribute('data-line-id')||'';
-      var item=(o.items||[]).find(function(i,idx){return String(i.id||idx)===String(lineId)})||{};
-      changes.push({lineId:lineId,fromName:item.name||'Ürün',fromSku:item.sku||'',quantity:Number(item.quantity||0),toProductId:val.value,toVariantId:variantVal&&variantVal.value?variantVal.value:'',toProductName:name&&name.value?name.value:val.value,toVariantText:variantText&&variantText.value?variantText.value:'',toSku:sku&&sku.value?sku.value:''});
+      var baseLineId=line.getAttribute('data-base-line-id')||lineId;
+      var unitIndex=Number(line.getAttribute('data-unit-index')||1);
+      var oldPrice=Number(line.getAttribute('data-old-price')||0);
+      var newPrice=Number(priceInput&&priceInput.value||0);
+      var item=(o.items||[]).find(function(i,idx){return String(i.id||idx)===String(baseLineId)})||{};
+      changes.push({lineId:lineId,fromName:item.name||'Ürün',fromSku:item.sku||'',quantity:1,unitIndex:unitIndex,fromPrice:oldPrice,toPrice:newPrice,priceDiff:newPrice-oldPrice,toProductId:val.value,toVariantId:variantVal&&variantVal.value?variantVal.value:'',toProductName:name&&name.value?name.value:val.value,toVariantText:variantText&&variantText.value?variantText.value:'',toSku:sku&&sku.value?sku.value:''});
     });
     if(!changes.length){toast('Değiştirilecek ürün seç.');return;}
     var reminder=card.querySelector('.exchange-reminder-at');
-    api('/api/admin/exchanges',{method:'POST',body:JSON.stringify({customerKey:c.key||'',customerName:c.name||o.customer||'',customerPhone:c.phone||o.phone||'',customerEmail:c.email||o.email||'',orderId:o.id,orderNumber:o.orderNumber||'',orderDisplay:o.number||o.orderNumber||'',changes:changes,reminderAt:reminder&&reminder.value||''})}).then(function(){toast('Değişim kaydedildi'); return loadExchangeRecords();}).then(function(){renderExchange(); renderIkas();}).catch(function(err){alert('Değişim kaydedilemedi: '+err.message)});
+    var reason=card.querySelector('.exchange-reason');
+    api('/api/admin/exchanges',{method:'POST',body:JSON.stringify({customerKey:c.key||'',customerName:c.name||o.customer||'',customerPhone:c.phone||o.phone||'',customerEmail:c.email||o.email||'',orderId:o.id,orderNumber:o.orderNumber||'',orderDisplay:o.number||o.orderNumber||'',changes:changes,reason:reason&&reason.value||'',reminderAt:reminder&&reminder.value||''})}).then(function(){toast('Değişim kaydedildi'); return loadExchangeRecords();}).then(function(){renderExchange(); renderIkas(); renderExchangeNotes();}).catch(function(err){alert('Değişim kaydedilemedi: '+err.message)});
   }
   
-function orderReturnRecord(o){return returnRecords.find(function(x){return String(x.orderId||'')===String(o&&o.id||'')})}
+
+function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFractionDigits:2})}
+  function variantPrice(v){
+    var p=Number((v&&v.discountPrice)||0);
+    if(!p)p=Number((v&&v.sellPrice)||0);
+    return p||0;
+  }
+  function findExchangeProduct(productId, productName){
+    return (ikasSummary.products||[]).find(function(p){return String(p.id||p.name||'')===String(productId)}) ||
+      (ikasSummary.products||[]).find(function(p){return String(p.name||'')===String(productName)}) || null;
+  }
+  function selectExchangeVariant(select){
+    if(!select)return;
+    var wrap=select.closest('.exchange-pick-wrap');
+    if(!wrap)return;
+    var variantIdInput=wrap.querySelector('.exchange-variant-value');
+    var variantTextInput=wrap.querySelector('.exchange-variant-text');
+    var skuInput=wrap.querySelector('.exchange-product-sku');
+    var priceInput=wrap.querySelector('.exchange-product-price');
+    var opt=select.options[select.selectedIndex];
+    var variantId=opt?opt.getAttribute('data-variant-id')||'':'';
+    var variantText=opt?opt.getAttribute('data-variant-text')||'':'';
+    var sku=opt?opt.getAttribute('data-sku')||'':'';
+    var price=opt?Number(opt.getAttribute('data-price')||0):0;
+    if(variantIdInput)variantIdInput.value=variantId;
+    if(variantTextInput)variantTextInput.value=variantText;
+    if(skuInput)skuInput.value=sku;
+    if(priceInput)priceInput.value=price||0;
+    updateExchangePriceDiff(wrap);
+  }
+  function populateExchangeVariants(wrap, product){
+    var select=wrap&&wrap.querySelector?wrap.querySelector('.exchange-variant-select'):null;
+    if(!select)return;
+    var variants=(product&&product.variants&&product.variants.length)?product.variants:[{}];
+    var options=variants.map(function(v,idx){
+      var variantText=v.variantText||v.name||'';
+      var sku=v.sku||'';
+      var price=variantPrice(v);
+      var label=[variantText||('Varyant '+(idx+1)),sku?('SKU: '+sku):'',price?money(price):'Fiyat yok'].filter(Boolean).join(' • ');
+      return '<option value="'+escapeHtml(v.id||idx)+'" data-variant-id="'+escapeHtml(v.id||'')+'" data-variant-text="'+escapeHtml(variantText||'')+'" data-sku="'+escapeHtml(sku||'')+'" data-price="'+escapeHtml(price||0)+'">'+escapeHtml(label)+'</option>';
+    }).join('');
+    select.innerHTML=options||'<option value="">Varyant yok</option>';
+    select.disabled=false;
+    selectExchangeVariant(select);
+  }
+  function updateExchangePriceDiff(picker){
+    if(!picker)return;
+    var wrap=picker.closest&&picker.closest('.exchange-pick-wrap')?picker.closest('.exchange-pick-wrap'):picker;
+    var line=wrap.closest('.exchange-line');
+    if(!line)return;
+    var oldPrice=Number(line.getAttribute('data-old-price')||0);
+    var priceInput=wrap.querySelector('.exchange-product-price');
+    var newPrice=Number(priceInput&&priceInput.value||0);
+    var box=line.querySelector('.exchange-price-diff');
+    if(!box)return;
+    if(!newPrice && !oldPrice){
+      box.innerHTML='<span class="price-muted">Fiyat bilgisi yok</span>';
+      box.className='exchange-price-diff';
+      return;
+    }
+    var diff=newPrice-oldPrice;
+    if(diff>0){
+      box.className='exchange-price-diff pay-extra';
+      box.innerHTML='Ekstra ödenecek: <b>'+money(diff)+'</b>';
+    }else if(diff<0){
+      box.className='exchange-price-diff money-left';
+      box.innerHTML='Kalan para: <b>'+money(Math.abs(diff))+'</b>';
+    }else{
+      box.className='exchange-price-diff price-even';
+      box.innerHTML='Fiyat farkı yok';
+    }
+  }
+  function orderReturnRecord(o){return returnRecords.find(function(x){return String(x.orderId||'')===String(o&&o.id||'')})}
   function renderReturn(){
     var root=$('returnOrders'), detail=$('returnDetail');
     if(!root||!detail)return;
@@ -4757,7 +5215,51 @@ function orderReturnRecord(o){return returnRecords.find(function(x){return Strin
     var reason=card.querySelector('.return-reason');
     api('/api/admin/returns',{method:'POST',body:JSON.stringify({customerName:o.customer||'',customerPhone:o.phone||'',customerEmail:o.email||'',orderId:o.id,orderNumber:o.orderNumber||'',orderDisplay:o.number||o.orderNumber||'',items:items,reason:reason&&reason.value||''})}).then(function(){toast('İade kaydedildi');return loadReturnRecords();}).then(function(){renderReturn();renderIkas();}).catch(function(err){alert('İade kaydedilemedi: '+err.message)});
   }
-  function renderCustomers(){ var el=$('customers'); if(!el)return; var items=filteredConversations(); if(!items.length){el.innerHTML='<div class="empty">Henüz müşteri yok.</div>';return;} el.innerHTML=items.map(function(c){return '<div class="customer-row '+(c.id===activeId?'active':'')+'" data-id="'+escapeHtml(c.id)+'"><div class="row"><div class="name">'+escapeHtml(c.displayName||'Ziyaretçi')+'</div>'+statusPill(c)+'</div><div class="preview">'+escapeHtml(c.visitorPhone||c.lastMessageText||'Müşteri kaydı')+'</div></div>'}).join(''); qsa('#customers .customer-row').forEach(function(x){x.addEventListener('click',function(){selectConversation(x.getAttribute('data-id'),'crm')})}) }
+  
+function renderExchangeNotes(){
+    var el=$('exchangeNotesList'); if(!el)return;
+    var records=(exchangeRecords||[]).slice().sort(function(a,b){return String(b.createdAt||'').localeCompare(String(a.createdAt||''))});
+    if(!records.length){el.innerHTML='<div class="empty">Henüz değişim kaydı yok.</div>';return;}
+
+    var pageSize=5;
+    var pageCount=Math.max(1,Math.ceil(records.length/pageSize));
+    if(exchangeNotesPage<1)exchangeNotesPage=1;
+    if(exchangeNotesPage>pageCount)exchangeNotesPage=pageCount;
+    var pageItems=records.slice((exchangeNotesPage-1)*pageSize,exchangeNotesPage*pageSize);
+
+    var cards=pageItems.map(function(rec){
+      var changes=(rec.changes||[]).map(function(ch){
+        var to=[ch.toProductName,ch.toVariantText,ch.toSku?('SKU: '+ch.toSku):''].filter(Boolean).join(' • ');
+        var diff=Number(ch.priceDiff||0);
+        var diffText=diff>0?' • Ekstra: '+money(diff):(diff<0?' • Kalan: '+money(Math.abs(diff)):'');
+        return '<div class="exchange-note-product"><span class="changed-product-red">'+escapeHtml(ch.fromName||'Ürün')+(Number(ch.unitIndex||1)>1?' #'+Number(ch.unitIndex):'')+'</span><span class="exchange-arrow">→</span><span>'+escapeHtml(to||'Yeni ürün')+escapeHtml(diffText)+'</span></div>';
+      }).join('');
+      return '<div class="exchange-note"><div class="row"><div><div class="name">'+escapeHtml(rec.orderDisplay||rec.orderNumber||'Sipariş')+' — '+escapeHtml(rec.customerName||'Müşteri')+'</div><div class="note-meta">Neden: '+escapeHtml(rec.reason||'Seçilmedi')+' • '+fmtDate(rec.createdAt)+'</div></div><span class="badge exchange-done">Değişim</span></div>'+changes+'</div>';
+    }).join('');
+
+    var pager='';
+    if(records.length>pageSize){
+      var buttons=[];
+      for(var p=1;p<=pageCount;p++){
+        if(p===1 || p===pageCount || Math.abs(p-exchangeNotesPage)<=1){
+          buttons.push('<button type="button" class="btn ghost exchange-notes-page-btn '+(p===exchangeNotesPage?'active':'')+'" data-page="'+p+'">'+p+'</button>');
+        }else if(buttons[buttons.length-1] !== '<span class="exchange-page-dots">…</span>'){
+          buttons.push('<span class="exchange-page-dots">…</span>');
+        }
+      }
+      pager='<div class="exchange-notes-pagination"><button type="button" class="btn ghost exchange-notes-page-btn" data-page="'+Math.max(1,exchangeNotesPage-1)+'">‹</button>'+buttons.join('')+'<button type="button" class="btn ghost exchange-notes-page-btn" data-page="'+Math.min(pageCount,exchangeNotesPage+1)+'">›</button></div><div class="exchange-notes-count">'+records.length+' değişim notu • Sayfa '+exchangeNotesPage+'/'+pageCount+'</div>';
+    }
+
+    el.innerHTML=cards+pager;
+    qsa('#exchangeNotesList .exchange-notes-page-btn').forEach(function(btn){
+      btn.addEventListener('click',function(e){
+        e.preventDefault();
+        exchangeNotesPage=Number(btn.getAttribute('data-page')||1);
+        renderExchangeNotes();
+      });
+    });
+  }
+    function renderCustomers(){ var el=$('customers'); if(!el)return; var items=filteredConversations(); if(!items.length){el.innerHTML='<div class="empty">Henüz müşteri yok.</div>';return;} el.innerHTML=items.map(function(c){return '<div class="customer-row '+(c.id===activeId?'active':'')+'" data-id="'+escapeHtml(c.id)+'"><div class="row"><div class="name">'+escapeHtml(c.displayName||'Ziyaretçi')+'</div>'+statusPill(c)+'</div><div class="preview">'+escapeHtml(c.visitorPhone||c.lastMessageText||'Müşteri kaydı')+'</div></div>'}).join(''); qsa('#customers .customer-row').forEach(function(x){x.addEventListener('click',function(){selectConversation(x.getAttribute('data-id'),'crm')})}) }
   function getActive(){return conversations.find(function(c){return c.id===activeId})||{}}
   function selectConversation(id,route){ if(activeId&&activeId!==id)sendTyping(false,activeId); activeId=id; renderConversations(); renderCustomers(); if(route)setRoute(route,true); if(route==='support')loadMessages(id); if(route==='crm')loadCrmDetail(id); }
   function fillInfo(c){setText('infoName',c.displayName||'-');setText('infoPhone',c.visitorPhone||'-');setText('infoLast',c.lastMessageText||'-');setText('infoPage',c.pageTitle||c.pageUrl||'-')}
@@ -4826,7 +5328,7 @@ function orderReturnRecord(o){return returnRecords.find(function(x){return Strin
   function toggleConversationClosed(){if(!activeId)return; var c=getActive(); var next=c.status==='closed'?'open':'closed'; ['closeConversation','mobileCloseConversation'].forEach(function(id){var b=$(id); if(b)b.disabled=true;}); api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/status',{method:'POST',body:JSON.stringify({status:next})}).then(function(){loadConversations(true);loadMessages(activeId,true);toast(next==='closed'?'Sohbet kapatıldı':'Sohbet yeniden açıldı')}).catch(function(err){alert('Sohbet durumu değiştirilemedi: '+err.message); updateCloseConversationButtons(c);});}
   on('closeConversation','click',toggleConversationClosed);
   on('mobileCloseConversation','click',toggleConversationClosed);
-  function loadCrmDetail(id,silent){var c=getActive(); setText('crmTitle',c.displayName||'Ziyaretçi'); setText('crmSub',c.pageTitle||c.pageUrl||'Müşteri kaydı'); setText('crmPhone',c.visitorPhone||'-'); setText('crmStatus',statusLabel(c)); setText('crmLast',c.lastMessageText||'-'); $('noteText').disabled=false; $('noteReminder').disabled=false; $('noteBtn').disabled=false; if(!silent)$('notesList').innerHTML='<div class="empty">Notlar yükleniyor...</div>'; return api('/api/admin/conversations/'+encodeURIComponent(id)+'/messages').then(function(d){renderNotes(d.notes||[])}).catch(function(err){$('notesList').innerHTML='<div class="empty">CRM yüklenemedi: '+escapeHtml(err.message)+'</div>'})}
+  function loadCrmDetail(id,silent){var c=getActive(); setText('crmTitle',c.displayName||'Ziyaretçi'); setText('crmSub',c.pageTitle||c.pageUrl||'Müşteri kaydı'); setText('crmPhone',c.visitorPhone||'-'); setText('crmStatus',statusLabel(c)); setText('crmLast',c.lastMessageText||'-'); $('noteText').disabled=false; $('noteReminder').disabled=false; $('noteBtn').disabled=false; if(!silent)$('notesList').innerHTML='<div class="empty">Notlar yükleniyor...</div>'; return api('/api/admin/conversations/'+encodeURIComponent(id)+'/messages').then(function(d){renderNotes(d.notes||[]); renderExchangeNotes();}).catch(function(err){$('notesList').innerHTML='<div class="empty">CRM yüklenemedi: '+escapeHtml(err.message)+'</div>'})}
   function renderNotes(notes){var el=$('notesList'); if(!notes.length){el.innerHTML='<div class="empty">Bu müşteri için henüz özel not yok.</div>';return;} el.innerHTML=notes.map(function(n){return '<div class="note '+(n.completedAt?'done':'')+'"><div class="row"><div class="note-body">'+escapeHtml(n.body)+'</div><button class="btn ghost note-done" data-id="'+escapeHtml(n.id)+'" data-done="'+(n.completedAt?'1':'0')+'">'+(n.completedAt?'Geri Al':'Tamamla')+'</button></div><div class="note-meta">Hatırlatma: '+escapeHtml(n.reminderAt?fmtDate(n.reminderAt):'Yok')+' • Oluşturuldu: '+fmtDate(n.createdAt)+'</div></div>'}).join(''); qsa('.note-done').forEach(function(b){b.addEventListener('click',function(){api('/api/admin/notes/'+encodeURIComponent(b.getAttribute('data-id')),{method:'PATCH',body:JSON.stringify({completed:b.getAttribute('data-done')!=='1'})}).then(function(){loadCrmDetail(activeId);loadReminders()})})})}
   on('noteForm','submit',function(e){e.preventDefault(); if(!activeId)return; var text=$('noteText').value.trim(); if(!text)return; $('noteBtn').disabled=true; api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/notes',{method:'POST',body:JSON.stringify({note:text,reminderAt:$('noteReminder').value||''})}).then(function(){$('noteText').value='';$('noteReminder').value='';loadCrmDetail(activeId);loadReminders();toast('Müşteri notu eklendi')}).catch(function(err){alert('Not eklenemedi: '+err.message)}).finally(function(){$('noteBtn').disabled=false})});
   function imgHtml(src, cls){return '<div class="prod-img '+(cls||'')+'">'+(src?'<img src="'+escapeHtml(src)+'" alt="" loading="lazy">':'◇')+'</div>'}
@@ -4886,26 +5388,27 @@ function orderReturnRecord(o){return returnRecords.find(function(x){return Strin
     if(choice){
       e.preventDefault();
       var picker=choice.closest('.exchange-product-picker');
-      if(!picker)return;
-      var val=picker.querySelector('.exchange-product-value');
-      var variantVal=picker.querySelector('.exchange-variant-value');
-      var name=picker.querySelector('.exchange-product-name');
-      var variantTextInput=picker.querySelector('.exchange-variant-text');
-      var sku=picker.querySelector('.exchange-product-sku');
+      var wrap=choice.closest('.exchange-pick-wrap');
+      if(!picker||!wrap)return;
+      var val=wrap.querySelector('.exchange-product-value');
+      var name=wrap.querySelector('.exchange-product-name');
       var trig=picker.querySelector('.exchange-product-trigger');
       var image=choice.getAttribute('data-product-image')||'';
+      var productId=choice.getAttribute('data-product-id')||'';
       var productName=choice.getAttribute('data-product-name')||choice.textContent.trim();
-      var productSku=choice.getAttribute('data-product-sku')||'';
-      var variantId=choice.getAttribute('data-variant-id')||'';
-      var variantText=choice.getAttribute('data-variant-text')||'';
-      if(val)val.value=choice.getAttribute('data-product-id')||productName;
-      if(variantVal)variantVal.value=variantId;
+      if(val)val.value=productId||productName;
       if(name)name.value=productName;
-      if(variantTextInput)variantTextInput.value=variantText;
-      if(sku)sku.value=productSku;
-      var small=[variantText,productSku?('SKU: '+productSku):''].filter(Boolean).join(' • ')||'Seçildi';
+      var product=findExchangeProduct(productId,productName);
+      populateExchangeVariants(wrap,product);
+      var select=wrap.querySelector('.exchange-variant-select');
+      var opt=select&&select.options[select.selectedIndex];
+      var variantText=opt?opt.getAttribute('data-variant-text')||'':'';
+      var sku=opt?opt.getAttribute('data-sku')||'':'';
+      var price=opt?Number(opt.getAttribute('data-price')||0):0;
+      var small=[variantText,sku?('SKU: '+sku):'',price?money(price):'Varyant seç'].filter(Boolean).join(' • ');
       if(trig)trig.innerHTML=imgHtml(image,'')+'<span class="pick-copy"><b>'+escapeHtml(productName)+'</b><small>'+escapeHtml(small)+'</small></span><span>✓</span>';
       picker.classList.remove('open');
+      updateExchangePriceDiff(wrap);
       return;
     }
     if(!e.target.closest || !e.target.closest('.exchange-product-picker')){
@@ -4913,6 +5416,21 @@ function orderReturnRecord(o){return returnRecords.find(function(x){return Strin
     }
   });
 
+  document.addEventListener('change',function(e){
+    var select=e.target&&e.target.closest?e.target.closest('.exchange-variant-select'):null;
+    if(!select)return;
+    selectExchangeVariant(select);
+    var wrap=select.closest('.exchange-pick-wrap');
+    var trig=wrap&&wrap.querySelector('.exchange-product-trigger');
+    var productName=wrap&&wrap.querySelector('.exchange-product-name')?wrap.querySelector('.exchange-product-name').value:'Ürün';
+    var opt=select.options[select.selectedIndex];
+    var variantText=opt?opt.getAttribute('data-variant-text')||'':'';
+    var sku=opt?opt.getAttribute('data-sku')||'':'';
+    var price=opt?Number(opt.getAttribute('data-price')||0):0;
+    var img=trig&&trig.querySelector('.prod-img')?trig.querySelector('.prod-img').outerHTML:imgHtml('', '');
+    var small=[variantText,sku?('SKU: '+sku):'',price?money(price):'Fiyat yok'].filter(Boolean).join(' • ');
+    if(trig)trig.innerHTML=img+'<span class="pick-copy"><b>'+escapeHtml(productName)+'</b><small>'+escapeHtml(small)+'</small></span><span>✓</span>';
+  });
   on('pushBtn','click',subscribePush); on('pushSetupBtn','click',subscribePush); on('pushTestBtn','click',sendTestPush);
   function refreshPushStatus(){var el=$('pushStatusText'); if(!el)return; var permission=(typeof Notification!=='undefined'?Notification.permission:'unsupported'); api('/api/admin/push/status').then(function(s){var text='Sunucu: '+(s.pushReady?'hazır':'hazır değil')+' • Kayıtlı cihaz: '+(s.subscriptionCount||0)+' • Bu cihaz izni: '+permission; if(!s.pushReady)text+=' • Render env içinde VAPID_PUBLIC_KEY ve VAPID_PRIVATE_KEY lazım.'; if(s.error)text+=' • Kayıt tablosu hatası: '+s.error; el.textContent=text;}).catch(function(){el.textContent='Bildirim durumu alınamadı.'})}
   function subscribePush(){ if(!('serviceWorker' in navigator)||!('PushManager' in window)){alert('Bu tarayıcı bildirim desteklemiyor. iPhone kullanıyorsan paneli Safari ile açıp Ana Ekrana Ekle, sonra ana ekrandaki ikonla aç.');return Promise.reject(new Error('unsupported'));} if(typeof Notification==='undefined'){alert('Bu tarayıcı bildirim izni desteklemiyor.');return Promise.reject(new Error('notifications_unsupported'));} return api('/api/admin/me').then(function(me){if(!me.vapidPublicKey)throw new Error('VAPID key yok. Render Environment kısmına VAPID_PUBLIC_KEY ve VAPID_PRIVATE_KEY eklenmeli.'); return navigator.serviceWorker.register('/sw.js').then(function(reg){return navigator.serviceWorker.ready.then(function(){return reg.pushManager.getSubscription().then(function(existing){if(existing)return existing; if(Notification.permission==='denied')throw new Error('Bildirim izni engellenmiş. Telefon ayarlarından izin ver.'); var ask=Notification.permission==='granted'?Promise.resolve('granted'):Notification.requestPermission(); return ask.then(function(permission){if(permission!=='granted')throw new Error('Bildirim izni verilmedi.'); return reg.pushManager.subscribe({userVisibleOnly:true,applicationServerKey:urlBase64ToUint8Array(me.vapidPublicKey)});});});});});}).then(function(sub){return api('/api/admin/push/subscribe',{method:'POST',body:JSON.stringify({subscription:sub})})}).then(function(){toast('Bildirimler açıldı'); refreshPushStatus(); return sendTestPush(true);}).catch(function(err){alert('Bildirim açılamadı: '+err.message); refreshPushStatus(); throw err;})}
@@ -5247,8 +5765,13 @@ function addExchangeRecord(data) {
       toVariantId: String(change.toVariantId || "").slice(0, 180),
       toProductName: String(change.toProductName || "").slice(0, 240),
       toVariantText: String(change.toVariantText || "").slice(0, 180),
-      toSku: String(change.toSku || "").slice(0, 120)
+      toSku: String(change.toSku || "").slice(0, 120),
+      fromPrice: Number(change.fromPrice || 0),
+      toPrice: Number(change.toPrice || 0),
+      priceDiff: Number(change.priceDiff || 0),
+      unitIndex: Number(change.unitIndex || 1)
     })).filter((change) => change.fromName || change.toProductName) : [],
+    reason: String(data.reason || "").slice(0, 120),
     note: String(data.note || "").slice(0, 1000),
     reminderAt: normalizeReminderAt(data.reminderAt || ""),
     reminderSentAt: "",
