@@ -3745,7 +3745,7 @@ function adminHtml(serverAdmin) {
 <script>
 (function(){
   var token=localStorage.getItem('ruth_admin_token')||'';
-  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null; var ikasLoading=false; var ikasAutoTimer=null; var ikasConnecting=false; var ikasConnectedFast=false; var selectedAdminImage=null;
+  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null; var ikasLoading=false; var ikasAutoTimer=null; var ikasConnecting=false; var ikasConnectedFast=false; var ikasStableStatus='Bağlanıyor'; var selectedAdminImage=null;
   var storedDatePreset=localStorage.getItem('ruth_panel_date_preset'); var datePreset=storedDatePreset||'today'; if(!localStorage.getItem('ruth_panel_date_default_today_v18')){datePreset='today'; localStorage.setItem('ruth_panel_date_preset','today'); localStorage.setItem('ruth_panel_date_default_today_v18','1')} var dateStart=localStorage.getItem('ruth_panel_date_start')||''; var dateEnd=localStorage.getItem('ruth_panel_date_end')||''; var ordersPage=1; var allOrdersPage=1; var deliveredOrdersPage=1; var orderSearch=''; var productSearch='';
   var ISTANBUL_TZ='Europe/Istanbul'; var TR_OFFSET_MS=3*60*60*1000;
   function $(id){return document.getElementById(id)}
@@ -3783,7 +3783,7 @@ function adminHtml(serverAdmin) {
   window.addEventListener('popstate',function(){setRoute(routeFromPath(),false)});
   function routeFromPath(){var p=location.pathname||'/admin/'; if(p.indexOf('/admin/')===0){p=p.slice('/admin/'.length)} else if(p==='/admin'){p=''}; while(p.endsWith('/')) p=p.slice(0,-1); return p||'overview'}
   function setRoute(route,push){var allowed=['overview','support','crm','orders','integration','notifications','products','reports','settings','ikas-orders','ikas-products','ikas-collections','ikas-ready-orders','ikas-ready-products']; if(allowed.indexOf(route)<0) route='overview'; activeRoute=route; qsa('.page').forEach(function(p){p.classList.remove('active')}); var page=$('page-'+route); if(page) page.classList.add('active'); qsa('.nav-item').forEach(function(n){n.classList.toggle('active',n.getAttribute('data-route')===route)}); var titles={overview:'Genel Bakış',support:'Canlı Destek',crm:'CRM',orders:'Siparişler',integration:'ikas Entegrasyonu',notifications:'Bildirimler',products:'Ürünler',reports:'Raporlar',settings:'Ayarlar','ikas-orders':'Tüm Siparişler','ikas-products':'Tüm Ürünler','ikas-collections':'Tüm Koleksiyonlar','ikas-ready-orders':'Hazırlanacak Siparişler','ikas-ready-products':'Hazırlanacak Ürün Toplamları'}; setText('crumbTitle',titles[route]||'Panel'); if(push) history.pushState(null,'','/admin/'+(route==='overview'?'':route)); if(route==='support'){loadConversations(true)} if(route==='crm'){loadConversations(true)} if(['orders','integration','products','ikas-orders','ikas-products','ikas-collections','ikas-ready-orders','ikas-ready-products'].indexOf(route)>=0){loadIkasSummary(true,false)} }
-  function loadAll(){ loadConversations(true); loadReminders(); connectIkasFast(); loadIkasSummary(true,false); setInterval(function(){if(token)loadConversations(true)},6000); if(!ikasAutoTimer){ikasAutoTimer=setInterval(function(){if(token){connectIkasFast(); loadIkasSummary(true,false)}},120000);} }
+  function loadAll(){ loadConversations(true); loadReminders(); if(!isIkasActuallyConnected(ikasSummary))connectIkasFast(); loadIkasSummary(true,false); setInterval(function(){if(token)loadConversations(true)},6000); if(!ikasAutoTimer){ikasAutoTimer=setInterval(function(){if(token){loadIkasSummary(true,false)}},120000);} }
 
   function refreshAllData(force){
     return Promise.all([
@@ -3825,6 +3825,21 @@ function adminHtml(serverAdmin) {
       el.style.setProperty('--pull-rotate','0deg');
       var txt=$('pullRefreshText'); if(txt)txt.textContent='Yenilemek için aşağı çek';
     }
+    function markReloadDone(){
+      try{ sessionStorage.setItem('ruthPullRefreshDone','1'); }catch(_){ }
+    }
+    function consumeReloadDone(){
+      try{
+        if(sessionStorage.getItem('ruthPullRefreshDone')==='1'){
+          sessionStorage.removeItem('ruthPullRefreshDone');
+          setTimeout(function(){
+            setIndicator(96,'done');
+            setTimeout(function(){hideIndicator(); toast('Sayfa yenilendi');},700);
+          },220);
+        }
+      }catch(_){ }
+    }
+    consumeReloadDone();
     document.addEventListener('touchstart',function(e){
       if(!isMobile()||refreshing||blockedTarget(e.target))return;
       if(scrollTop()>2)return;
@@ -3848,14 +3863,24 @@ function adminHtml(serverAdmin) {
       if(!ready){hideIndicator();return;}
       refreshing=true;
       setIndicator(96,'refreshing');
-      refreshAllData(true).then(function(){
-        setIndicator(96,'done');
-        toast('Sayfa yenilendi');
-      }).catch(function(){
-        toast('Yenileme başarısız');
-      }).finally(function(){
-        setTimeout(function(){refreshing=false;hideIndicator();},850);
-      });
+      markReloadDone();
+      var released=false;
+      var fallback=setTimeout(function(){
+        if(released)return;
+        refreshing=false;
+        hideIndicator();
+        toast('Yenileme tekrar denenebilir');
+      },4000);
+      window.addEventListener('pagehide',function(){ released=true; clearTimeout(fallback); },{once:true});
+      setTimeout(function(){
+        try{ window.scrollTo({top:0,behavior:'auto'}); }catch(_){ }
+        try{ window.location.reload(); }catch(_){
+          clearTimeout(fallback);
+          refreshing=false;
+          hideIndicator();
+          refreshAllData(true).then(function(){toast('Sayfa yenilendi');}).catch(function(){toast('Yenileme başarısız');});
+        }
+      },140);
     },{passive:true});
     document.addEventListener('touchcancel',function(){
       if(!refreshing){pulling=false;hideIndicator();}
@@ -3874,12 +3899,13 @@ function adminHtml(serverAdmin) {
     return false;
   }
   function ikasCurrentStatusText(){
-    if(ikasLoading && !isIkasActuallyConnected(ikasSummary))return 'Bağlanıyor';
     if(isIkasActuallyConnected(ikasSummary))return 'Bağlandı';
     if(ikasSummary && (ikasSummary.ikasError || (ikasSummary.orderError && ikasSummary.productError)))return 'Bağlanamadı';
     return 'Bağlanıyor';
   }
   function setIkasStatusText(value){
+    value=value||'Bağlanıyor';
+    ikasStableStatus=value;
     setText('ikasStatus', value);
     setText('topIkasStatusText', value);
     var el=$('ikasStatus');
@@ -3896,52 +3922,87 @@ function adminHtml(serverAdmin) {
     }
   }
   function connectIkasFast(){
+    if(isIkasActuallyConnected(ikasSummary)) {
+      ikasConnectedFast=true;
+      setIkasStatusText('Bağlandı');
+      return Promise.resolve(true);
+    }
     if(ikasConnecting) return Promise.resolve(false);
     ikasConnecting=true;
     setIkasStatusText('Bağlanıyor');
     return api('/api/admin/ikas/connect').then(function(d){
       if(d && d.connected){
-        // Sadece API doğrulandı. Tam veri gelmeden "Bağlandı" yazma.
-        setIkasStatusText('Bağlanıyor');
+        // Hızlı kontrol geçti ama veri gelmeden Bağlandı yazma.
+        if(!isIkasActuallyConnected(ikasSummary)) setIkasStatusText('Bağlanıyor');
         return true;
       }
-      setIkasStatusText('Bağlanamadı');
+      if(!isIkasActuallyConnected(ikasSummary)) setIkasStatusText('Bağlanamadı');
       setTimeout(function(){ if(token && !isIkasActuallyConnected(ikasSummary)) connectIkasFast(); }, 3000);
       return false;
     }).catch(function(){
-      setIkasStatusText('Bağlanamadı');
+      if(!isIkasActuallyConnected(ikasSummary)) setIkasStatusText('Bağlanamadı');
       setTimeout(function(){ if(token && !isIkasActuallyConnected(ikasSummary)) connectIkasFast(); }, 3000);
       return false;
     }).finally(function(){ikasConnecting=false;});
   }
   function loadIkasSummary(silent,force){
     if(ikasLoading)return Promise.resolve(ikasSummary);
+    var wasConnected=isIkasActuallyConnected(ikasSummary);
     ikasLoading=true;
-    if(!isIkasActuallyConnected(ikasSummary)) connectIkasFast();
-    setIkasStatusText('Bağlanıyor');
+
+    if(!wasConnected) {
+      connectIkasFast();
+      setIkasStatusText('Bağlanıyor');
+    } else {
+      // Bağlıyken arka planda yenileme yap; üst yazıyı Bağlanıyor'a düşürme.
+      ikasConnectedFast=true;
+      setIkasStatusText('Bağlandı');
+    }
+
     var url='/api/admin/ikas/summary'+(force?'?refresh=1':'?fast=1');
     return api(url).then(function(d){
       if(d && d.connecting && !ikasHasVisibleData(d)){
-        setIkasStatusText('Bağlanıyor');
+        if(!wasConnected)setIkasStatusText('Bağlanıyor');
         renderIkas();
-        if(token)setTimeout(function(){loadIkasSummary(true,false)},1000);
+        if(token && !wasConnected)setTimeout(function(){loadIkasSummary(true,false)},1000);
         return ikasSummary;
       }
+
+      var previous=ikasSummary;
       ikasSummary=d||ikasSummary;
       ikasConnectedFast=isIkasActuallyConnected(ikasSummary);
-      setIkasStatusText(ikasConnectedFast?'Bağlandı':ikasCurrentStatusText());
+
+      if(ikasConnectedFast){
+        setIkasStatusText('Bağlandı');
+      } else if(wasConnected && previous){
+        // Yeni arka plan cevabı boş/geçici hatalıysa eski bağlı görünümü bozma.
+        ikasSummary=previous;
+        ikasConnectedFast=true;
+        setIkasStatusText('Bağlandı');
+      } else {
+        setIkasStatusText(ikasCurrentStatusText());
+      }
+
       renderIkas();
       if(!ikasConnectedFast && token && !force)setTimeout(function(){loadIkasSummary(true,false)},1500);
       return ikasSummary;
     }).catch(function(err){
-      ikasSummary.ikasError=err&&err.message?err.message:'ikas bağlantısı kurulamadı';
-      ikasConnectedFast=false;
-      setIkasStatusText('Bağlanamadı');
+      if(wasConnected){
+        // Arka plan yenileme hata verirse panelde zıplama yapma.
+        setIkasStatusText('Bağlandı');
+      } else {
+        ikasSummary.ikasError=err&&err.message?err.message:'ikas bağlantısı kurulamadı';
+        ikasConnectedFast=false;
+        setIkasStatusText('Bağlanamadı');
+        if(token)setTimeout(function(){loadIkasSummary(true,false)},3000);
+      }
       if(!silent)toast('ikas bağlantısı yenilenemedi');
       renderIkas();
-      if(token)setTimeout(function(){loadIkasSummary(true,false)},3000);
       return ikasSummary;
-    }).finally(function(){ikasLoading=false; setIkasStatusText(ikasCurrentStatusText());});
+    }).finally(function(){
+      ikasLoading=false;
+      setIkasStatusText(isIkasActuallyConnected(ikasSummary)?'Bağlandı':ikasCurrentStatusText());
+    });
   }
   function itemInDate(value){if(datePreset==='all')return true; var t=Date.parse(value||''); if(!t)return false; var r=activeDateRange(); return t>=r.start&&t<r.end}
   function renderAll(){ var datedConversations=conversations.filter(function(c){return itemInDate(c.updatedAt||c.lastCustomerMessageAt||c.createdAt)}); var open=datedConversations.filter(function(c){return c.status!=='closed'}).length; var unread=datedConversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0); var datedReminders=reminders.filter(function(r){return itemInDate(r.reminderAt||r.createdAt)}); setText('statOpen',open); setText('statUnread',unread); setText('statReminders',datedReminders.length); setText('badgeSupport',conversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0)); setText('topBadge',unread); renderRecent(); renderConversations(); renderCustomers(); renderReminders(); }
