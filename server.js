@@ -88,6 +88,8 @@ let ikasTokenCache = { token: "", expiresAt: 0 };
 let storefrontImageCache = { expiresAt: 0, bySlug: new Map(), byName: new Map(), urls: [] };
 let ikasSummaryCache = { expiresAt: 0, value: null };
 let ikasSummaryInFlight = null;
+let ikasWarmTimer = null;
+let ikasLastWarm = { ok: false, at: "", error: "" };
 const MAX_IMAGE_BYTES = Number(process.env.RUTH_MAX_IMAGE_BYTES || 10_000_000);
 const ADMIN_NOTIFICATION_TITLE = "RUTH ISTANBUL";
 
@@ -643,8 +645,11 @@ async function handleAdminApi(req, res, url) {
 
   if (req.method === "GET" && pathname === "/api/admin/ikas/summary") {
     try {
+      if (url.searchParams.get("refresh") === "1") {
+        ikasSummaryCache = { expiresAt: 0, value: null };
+      }
       const summary = await buildIkasSummary();
-      return sendJson(res, { ok: true, ...summary });
+      return sendJson(res, { ok: true, autoConnected: Boolean(ikasLastWarm.ok || summary.connected), lastWarm: ikasLastWarm, ...summary });
     } catch (error) {
       console.error("ikas summary error:", error && error.message ? error.message : error);
       return sendJson(res, {
@@ -1341,6 +1346,24 @@ async function buildIkasSummary() {
     ikasSummaryInFlight = null;
   });
   return await ikasSummaryInFlight;
+}
+
+async function warmIkasSummary(reason = "auto") {
+  if (!ikasConfigured()) {
+    ikasLastWarm = { ok: false, at: new Date().toISOString(), error: "IKAS env eksik" };
+    console.log("ikas auto connect skipped:", ikasLastWarm.error);
+    return null;
+  }
+  try {
+    const summary = await buildIkasSummary();
+    ikasLastWarm = { ok: true, at: new Date().toISOString(), error: "" };
+    console.log(`ikas auto connected (${reason}): ${Number((summary.orders || []).length)} orders, ${Number((summary.products || []).length)} products`);
+    return summary;
+  } catch (error) {
+    ikasLastWarm = { ok: false, at: new Date().toISOString(), error: error && error.message ? error.message : String(error) };
+    console.error(`ikas auto connect failed (${reason}):`, ikasLastWarm.error);
+    return null;
+  }
 }
 
 async function buildIkasSummaryFresh() {
@@ -3203,6 +3226,63 @@ function adminHtml(serverAdmin) {
   }
 }
 
+
+
+/* Mobile pull-to-refresh */
+.pull-refresh{
+  position:fixed;
+  left:50%;
+  top:calc(env(safe-area-inset-top,0px) + 10px);
+  transform:translate(-50%,-78px);
+  z-index:60;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-height:42px;
+  padding:9px 14px;
+  border:1px solid rgba(216,182,111,.28);
+  border-radius:999px;
+  background:rgba(7,8,10,.90);
+  box-shadow:0 18px 40px rgba(0,0,0,.32),inset 0 1px 0 rgba(255,255,255,.04);
+  color:var(--text);
+  font-size:12px;
+  font-weight:760;
+  pointer-events:none;
+  opacity:0;
+  transition:transform .18s cubic-bezier(.2,.8,.2,1),opacity .18s ease,border-color .18s ease;
+  backdrop-filter:blur(16px) saturate(145%);
+}
+.pull-refresh.visible{
+  opacity:1;
+}
+.pull-refresh.ready{
+  border-color:rgba(240,198,107,.62);
+}
+.pull-refresh.done{
+  border-color:rgba(119,204,146,.55);
+}
+.pull-spinner{
+  width:18px;
+  height:18px;
+  border-radius:50%;
+  border:2px solid rgba(216,182,111,.22);
+  border-top-color:#d8b66f;
+  transform:rotate(var(--pull-rotate,0deg));
+}
+.pull-refresh.refreshing .pull-spinner{
+  animation:ruthPullSpin .72s linear infinite;
+}
+.pull-refresh.done .pull-spinner{
+  border-color:rgba(119,204,146,.35);
+  border-top-color:#77cc92;
+}
+@keyframes ruthPullSpin{
+  to{transform:rotate(360deg)}
+}
+@media(min-width:821px){
+  .pull-refresh{display:none}
+}
+
 </style>
 </head>
 <body>
@@ -3377,12 +3457,12 @@ function adminHtml(serverAdmin) {
       </section>
     </main>
   </section>
-  <div id="toast" class="toast"></div>
+  <div id="pullRefresh" class="pull-refresh"><div class="pull-spinner"></div><span id="pullRefreshText">Yenilemek için aşağı çek</span></div><div id="toast" class="toast"></div>
 
 <script>
 (function(){
   var token=localStorage.getItem('ruth_admin_token')||'';
-  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null; var selectedAdminImage=null;
+  var conversations=[]; var reminders=[]; var ikasSummary={totals:{orders:0,units:0,readyOrders:0,readyUnits:0,deliveredOrders:0,products:0,collections:0},productTotals:[],readyProductTotals:[],orders:[],readyOrders:[],deliveredOrders:[],products:[],collections:[],connected:false}; var activeId=''; var activeRoute='overview'; var typingFor=''; var typingTimer=null; var typingStop=null; var ikasLoading=false; var ikasAutoTimer=null; var selectedAdminImage=null;
   var storedDatePreset=localStorage.getItem('ruth_panel_date_preset'); var datePreset=storedDatePreset||'today'; if(!localStorage.getItem('ruth_panel_date_default_today_v18')){datePreset='today'; localStorage.setItem('ruth_panel_date_preset','today'); localStorage.setItem('ruth_panel_date_default_today_v18','1')} var dateStart=localStorage.getItem('ruth_panel_date_start')||''; var dateEnd=localStorage.getItem('ruth_panel_date_end')||''; var ordersPage=1; var allOrdersPage=1; var deliveredOrdersPage=1; var orderSearch=''; var productSearch='';
   var ISTANBUL_TZ='Europe/Istanbul'; var TR_OFFSET_MS=3*60*60*1000;
   function $(id){return document.getElementById(id)}
@@ -3406,7 +3486,7 @@ function adminHtml(serverAdmin) {
   function prettifyUser(u){u=String(u||'Yönetici').trim(); return u?u.charAt(0).toLocaleUpperCase('tr-TR')+u.slice(1):'Yönetici'}
   function loadMe(){var headers={}; if(token) headers.Authorization='Bearer '+token; fetch('/api/admin/me',{headers:headers,credentials:'same-origin'}).then(function(r){return r.ok?r.json():null}).then(function(me){if(!me)return; var name=prettifyUser(me&&me.user&&me.user.username); setText('welcomeUser',name); setText('profileName',name)}).catch(function(){})}
 
-  function showApp(){ $('loginPage').classList.add('hidden'); $('app').classList.remove('hidden'); loadMe(); initDateFilters(); setRoute(routeFromPath(),false); loadAll(); }
+  function showApp(){ $('loginPage').classList.add('hidden'); $('app').classList.remove('hidden'); loadMe(); initDateFilters(); setRoute(routeFromPath(),false); loadAll(); initPullRefresh(); }
   function logout(push){token=''; localStorage.removeItem('ruth_admin_token'); try{fetch('/api/admin/logout',{method:'POST',credentials:'same-origin'}).catch(function(){})}catch(e){} $('app').classList.add('hidden'); $('loginPage').classList.remove('hidden'); if(push!==false) history.replaceState(null,'','/admin/'); }
   on('loginForm','submit',function(e){e.preventDefault(); setText('loginError',''); var btn=document.querySelector('#loginForm button[type="submit"]'); if(btn)btn.disabled=true; api('/api/admin/login',{method:'POST',body:JSON.stringify({username:$('loginUser').value.trim(),password:$('loginPass').value})}).then(function(d){token=d.token||''; if(!token){throw new Error('token alınamadı')} localStorage.setItem('ruth_admin_token',token); sessionStorage.setItem('ruth_admin_force_open','1'); location.reload();}).catch(function(err){setText('loginError','Giriş başarısız: '+err.message); if(btn)btn.disabled=false;})});
   on('logoutBtn','click',function(){logout()});
@@ -3419,11 +3499,105 @@ function adminHtml(serverAdmin) {
   (function setupPressFeel(){var selector='button,.btn,.icon-btn,.top-icon,.nav-item,.module,.metric.route-card,.quick-row,.conversation,.customer-row,.product-row,.order-row'; function target(e){return e.target&&e.target.closest?e.target.closest(selector):null} function clear(){qsa('.is-pressing').forEach(function(x){x.classList.remove('is-pressing')})} document.addEventListener('pointerdown',function(e){var el=target(e); if(!el||!$('app')||!$('app').contains(el))return; var module=el.closest&&el.closest('.module.route-card'); if(module)module.classList.add('is-pressing'); el.classList.add('is-pressing')},true); ['pointerup','pointercancel','dragstart','scroll'].forEach(function(name){document.addEventListener(name,clear,true)}); document.addEventListener('pointerleave',function(e){var el=target(e); if(el)el.classList.remove('is-pressing'); var module=el&&el.closest?el.closest('.module.route-card'):null; if(module)module.classList.remove('is-pressing')},true); })();
   window.addEventListener('popstate',function(){setRoute(routeFromPath(),false)});
   function routeFromPath(){var p=location.pathname||'/admin/'; if(p.indexOf('/admin/')===0){p=p.slice('/admin/'.length)} else if(p==='/admin'){p=''}; while(p.endsWith('/')) p=p.slice(0,-1); return p||'overview'}
-  function setRoute(route,push){var allowed=['overview','support','crm','orders','integration','notifications','products','reports','settings','ikas-orders','ikas-products','ikas-collections','ikas-ready-orders','ikas-ready-products']; if(allowed.indexOf(route)<0) route='overview'; activeRoute=route; qsa('.page').forEach(function(p){p.classList.remove('active')}); var page=$('page-'+route); if(page) page.classList.add('active'); qsa('.nav-item').forEach(function(n){n.classList.toggle('active',n.getAttribute('data-route')===route)}); var titles={overview:'Genel Bakış',support:'Canlı Destek',crm:'CRM',orders:'Siparişler',integration:'ikas Entegrasyonu',notifications:'Bildirimler',products:'Ürünler',reports:'Raporlar',settings:'Ayarlar','ikas-orders':'Tüm Siparişler','ikas-products':'Tüm Ürünler','ikas-collections':'Tüm Koleksiyonlar','ikas-ready-orders':'Hazırlanacak Siparişler','ikas-ready-products':'Hazırlanacak Ürün Toplamları'}; setText('crumbTitle',titles[route]||'Panel'); if(push) history.pushState(null,'','/admin/'+(route==='overview'?'':route)); if(route==='support'){loadConversations(true)} if(route==='crm'){loadConversations(true)} if(['orders','integration','products','ikas-orders','ikas-products','ikas-collections','ikas-ready-orders','ikas-ready-products'].indexOf(route)>=0){loadIkasSummary()} }
-  function loadAll(){ loadConversations(true); loadReminders(); loadIkasSummary(); setInterval(function(){if(token)loadConversations(true)},6000); }
+  function setRoute(route,push){var allowed=['overview','support','crm','orders','integration','notifications','products','reports','settings','ikas-orders','ikas-products','ikas-collections','ikas-ready-orders','ikas-ready-products']; if(allowed.indexOf(route)<0) route='overview'; activeRoute=route; qsa('.page').forEach(function(p){p.classList.remove('active')}); var page=$('page-'+route); if(page) page.classList.add('active'); qsa('.nav-item').forEach(function(n){n.classList.toggle('active',n.getAttribute('data-route')===route)}); var titles={overview:'Genel Bakış',support:'Canlı Destek',crm:'CRM',orders:'Siparişler',integration:'ikas Entegrasyonu',notifications:'Bildirimler',products:'Ürünler',reports:'Raporlar',settings:'Ayarlar','ikas-orders':'Tüm Siparişler','ikas-products':'Tüm Ürünler','ikas-collections':'Tüm Koleksiyonlar','ikas-ready-orders':'Hazırlanacak Siparişler','ikas-ready-products':'Hazırlanacak Ürün Toplamları'}; setText('crumbTitle',titles[route]||'Panel'); if(push) history.pushState(null,'','/admin/'+(route==='overview'?'':route)); if(route==='support'){loadConversations(true)} if(route==='crm'){loadConversations(true)} if(['orders','integration','products','ikas-orders','ikas-products','ikas-collections','ikas-ready-orders','ikas-ready-products'].indexOf(route)>=0){loadIkasSummary(true,false)} }
+  function loadAll(){ loadConversations(true); loadReminders(); loadIkasSummary(true,false); setInterval(function(){if(token)loadConversations(true)},6000); if(!ikasAutoTimer){ikasAutoTimer=setInterval(function(){if(token)loadIkasSummary(true,false)},120000);} }
+
+  function refreshAllData(force){
+    return Promise.all([
+      loadConversations(true),
+      loadReminders(),
+      loadIkasSummary(true,!!force)
+    ]).then(function(){renderAll(); renderIkas();});
+  }
+  function initPullRefresh(){
+    if(window.__ruthPullRefreshReady)return;
+    window.__ruthPullRefreshReady=true;
+    var startY=0, pulling=false, refreshing=false, ready=false;
+    var threshold=96;
+    function isMobile(){return window.matchMedia&&window.matchMedia('(max-width:820px)').matches}
+    function scrollTop(){return (document.scrollingElement||document.documentElement).scrollTop||window.pageYOffset||0}
+    function blockedTarget(t){return t&&t.closest&&t.closest('textarea,input,select,.message-space,.panel-body,.modal,.admin-photo-preview')}
+    function setIndicator(y,state){
+      var el=$('pullRefresh'), txt=$('pullRefreshText');
+      if(!el)return;
+      var shown=Math.max(0,Math.min(96,y));
+      el.classList.add('visible');
+      el.classList.toggle('ready',state==='ready');
+      el.classList.toggle('refreshing',state==='refreshing');
+      el.classList.toggle('done',state==='done');
+      el.style.transform='translate(-50%,'+(-78+shown)+'px)';
+      el.style.setProperty('--pull-rotate',Math.round(shown*3.6)+'deg');
+      if(txt){
+        if(state==='refreshing')txt.textContent='Yenileniyor...';
+        else if(state==='done')txt.textContent='Yenilendi';
+        else if(state==='ready')txt.textContent='Bırakınca yenilenecek';
+        else txt.textContent='Yenilemek için aşağı çek';
+      }
+    }
+    function hideIndicator(){
+      var el=$('pullRefresh');
+      if(!el)return;
+      el.classList.remove('visible','ready','refreshing','done');
+      el.style.transform='translate(-50%,-78px)';
+      el.style.setProperty('--pull-rotate','0deg');
+      var txt=$('pullRefreshText'); if(txt)txt.textContent='Yenilemek için aşağı çek';
+    }
+    document.addEventListener('touchstart',function(e){
+      if(!isMobile()||refreshing||blockedTarget(e.target))return;
+      if(scrollTop()>2)return;
+      startY=e.touches&&e.touches[0]?e.touches[0].clientY:0;
+      pulling=true; ready=false;
+    },{passive:true});
+    document.addEventListener('touchmove',function(e){
+      if(!pulling||refreshing||!isMobile())return;
+      var y=e.touches&&e.touches[0]?e.touches[0].clientY:0;
+      var diff=y-startY;
+      if(diff<=8)return;
+      if(scrollTop()>2){pulling=false;hideIndicator();return;}
+      e.preventDefault();
+      var shown=Math.min(96,diff*.58);
+      ready=shown>=threshold*.58;
+      setIndicator(shown,ready?'ready':'pull');
+    },{passive:false});
+    document.addEventListener('touchend',function(){
+      if(!pulling)return;
+      pulling=false;
+      if(!ready){hideIndicator();return;}
+      refreshing=true;
+      setIndicator(96,'refreshing');
+      refreshAllData(true).then(function(){
+        setIndicator(96,'done');
+        toast('Sayfa yenilendi');
+      }).catch(function(){
+        toast('Yenileme başarısız');
+      }).finally(function(){
+        setTimeout(function(){refreshing=false;hideIndicator();},850);
+      });
+    },{passive:true});
+    document.addEventListener('touchcancel',function(){
+      if(!refreshing){pulling=false;hideIndicator();}
+    },{passive:true});
+  }
+
   function loadConversations(silent){ return api('/api/admin/conversations').then(function(d){conversations=d.conversations||[]; renderAll(); if(activeId){ if(activeRoute==='support')loadMessages(activeId,true); if(activeRoute==='crm')loadCrmDetail(activeId,true); }}).catch(function(err){if(!silent)toast(err.message)})}
   function loadReminders(){return api('/api/admin/reminders/due').then(function(d){reminders=d.reminders||[]; renderReminders()}).catch(function(){})}
-  function loadIkasSummary(){return api('/api/admin/ikas/summary').then(function(d){ikasSummary=d||ikasSummary; renderIkas();}).catch(function(){renderIkas()})}
+  function loadIkasSummary(silent,force){
+    if(ikasLoading)return Promise.resolve(ikasSummary);
+    ikasLoading=true;
+    setText('ikasStatus','Bağlanıyor');
+    var url='/api/admin/ikas/summary'+(force?'?refresh=1':'');
+    return api(url).then(function(d){
+      ikasSummary=d||ikasSummary;
+      renderIkas();
+      return ikasSummary;
+    }).catch(function(err){
+      ikasSummary.ikasError=err&&err.message?err.message:'ikas bağlantısı kurulamadı';
+      if(!silent)toast('ikas bağlantısı yenilenemedi');
+      renderIkas();
+      if(token)setTimeout(function(){loadIkasSummary(true,false)},5000);
+      return ikasSummary;
+    }).finally(function(){ikasLoading=false;});
+  }
   function itemInDate(value){if(datePreset==='all')return true; var t=Date.parse(value||''); if(!t)return false; var r=activeDateRange(); return t>=r.start&&t<r.end}
   function renderAll(){ var datedConversations=conversations.filter(function(c){return itemInDate(c.updatedAt||c.lastCustomerMessageAt||c.createdAt)}); var open=datedConversations.filter(function(c){return c.status!=='closed'}).length; var unread=datedConversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0); var datedReminders=reminders.filter(function(r){return itemInDate(r.reminderAt||r.createdAt)}); setText('statOpen',open); setText('statUnread',unread); setText('statReminders',datedReminders.length); setText('badgeSupport',conversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0)); setText('topBadge',unread); renderRecent(); renderConversations(); renderCustomers(); renderReminders(); }
   function renderRecent(){ var el=$('recentConversations'); if(!el)return; var items=conversations.slice(0,4); if(!items.length){el.innerHTML='<div class="empty">Henüz konuşma yok.</div>';return;} el.innerHTML=items.map(function(c){return '<div class="mini-row"><div class="row"><div class="name">'+escapeHtml(c.displayName||'Ziyaretçi')+'</div><span class="time">'+fmtDate(c.updatedAt)+'</span></div><div class="preview">'+escapeHtml(c.lastMessageText||'Yeni konuşma')+'</div></div>'}).join('') }
@@ -3530,7 +3704,7 @@ function adminHtml(serverAdmin) {
     var collections=ikasSummary.collections||[];
     var units=orders.reduce(function(sum,o){return sum+(o.items||[]).reduce(function(s,i){return s+Number(i.quantity||0)},0)},0);
     var readyUnits=readyOrders.reduce(function(sum,o){return sum+(o.items||[]).reduce(function(s,i){return s+Number(i.quantity||0)},0)},0);
-    setText('statOrders',orders.length||0); setText('badgeOrders',orders.length||0); setText('ordersToday',orders.length||0); setText('unitsToday',units||0); setText('kindsToday',readyProducts.length||allProducts.length||0); setText('ordersTotal',orders.length||0); setText('unitsTotal',readyUnits||units||0); setText('productKinds',allProducts.length||readyProducts.length||0); setText('ikasStatus',ikasSummary.connected?'Bağlı':'Bekliyor'); setText('readyOrdersBadge',readyOrders.length||0); setText('badgeReadyOrders',readyOrders.length||0); setText('allOrdersBadge',orders.length||0); setText('deliveredOrdersBadge',delivered.length||0);
+    setText('statOrders',orders.length||0); setText('badgeOrders',orders.length||0); setText('ordersToday',orders.length||0); setText('unitsToday',units||0); setText('kindsToday',readyProducts.length||allProducts.length||0); setText('ordersTotal',orders.length||0); setText('unitsTotal',readyUnits||units||0); setText('productKinds',allProducts.length||readyProducts.length||0); setText('ikasStatus',ikasLoading?'Bağlanıyor':(ikasSummary.connected?'Bağlı':'Bağlantı bekliyor')); setText('readyOrdersBadge',readyOrders.length||0); setText('badgeReadyOrders',readyOrders.length||0); setText('allOrdersBadge',orders.length||0); setText('deliveredOrdersBadge',delivered.length||0);
     var top=$('topProducts'); if(top){ top.innerHTML=readyProducts.length?readyProducts.slice(0,5).map(function(p,i){return '<div class="rail-product">'+imgHtml(p.image,'')+'<div><div class="name">'+(i+1)+'. '+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+Number(p.quantity||0)+' adet • Kargoya hazır</div></div></div>'}).join(''):'<div class="empty">Kargoya hazır ürün bulunamadı.</div>'; }
     var el=$('productTotals'); if(el){ el.innerHTML=readyProducts.length?readyProducts.map(readyProductRow).join(''):'<div class="empty">Kargoya hazır olarak işaretlenmiş siparişlerde ürün yok.</div>'; }
     var list=$('ordersList'); if(list){ if(orders.length){var pg=pagedHtml(orders,ordersPage,10,'orders',orderCard); ordersPage=pg.page; list.innerHTML=pg.html;} else {list.innerHTML=(ikasSummary.ikasError?'<div class="empty">'+escapeHtml(ikasSummary.ikasError)+'</div>':'<div class="empty">Henüz canlı sipariş verisi bağlı değil.</div>');} }
@@ -3546,7 +3720,7 @@ function adminHtml(serverAdmin) {
     qsa('[data-order-search]').forEach(function(inp){inp.value=orderSearch; inp.addEventListener('input',function(){orderSearch=inp.value||''; ordersPage=1; allOrdersPage=1; qsa('[data-order-search]').forEach(function(other){if(other!==inp)other.value=orderSearch}); renderIkas()})});
   qsa('[data-product-search]').forEach(function(inp){inp.value=productSearch; inp.addEventListener('input',function(){productSearch=inp.value||''; qsa('[data-product-search]').forEach(function(other){if(other!==inp)other.value=productSearch}); renderIkas()})});
   document.addEventListener('click',function(e){var b=e.target.closest&&e.target.closest('[data-page-target]'); if(!b)return; var page=Number(b.getAttribute('data-page')||1); var target=b.getAttribute('data-page-target'); if(target==='orders')ordersPage=page; if(target==='allOrders')allOrdersPage=page; if(target==='deliveredOrders')deliveredOrdersPage=page; renderIkas();});
-  if($('syncOrders'))$('syncOrders').addEventListener('click',function(){loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})}); if($('quickSync'))$('quickSync').addEventListener('click',function(){setRoute('ikas-orders',true);loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})}); qsa('.ikas-refresh').forEach(function(btn){btn.addEventListener('click',function(){loadIkasSummary().then(function(){toast('ikas verisi yenilendi')})})});
+  if($('syncOrders'))$('syncOrders').addEventListener('click',function(){loadIkasSummary(false,true).then(function(){toast('ikas verisi yenilendi')})}); if($('quickSync'))$('quickSync').addEventListener('click',function(){setRoute('ikas-orders',true);loadIkasSummary(false,true).then(function(){toast('ikas verisi yenilendi')})}); qsa('.ikas-refresh').forEach(function(btn){btn.addEventListener('click',function(){loadIkasSummary(false,true).then(function(){toast('ikas verisi yenilendi')})})});
   on('refreshSupport','click',function(){loadConversations(false)}); on('refreshCrm','click',function(){loadConversations(false)}); on('searchInput','input',renderConversations); on('crmSearch','input',renderCustomers);
   on('pushBtn','click',subscribePush); on('pushSetupBtn','click',subscribePush); on('pushTestBtn','click',sendTestPush);
   function refreshPushStatus(){var el=$('pushStatusText'); if(!el)return; var permission=(typeof Notification!=='undefined'?Notification.permission:'unsupported'); api('/api/admin/push/status').then(function(s){var text='Sunucu: '+(s.pushReady?'hazır':'hazır değil')+' • Kayıtlı cihaz: '+(s.subscriptionCount||0)+' • Bu cihaz izni: '+permission; if(!s.pushReady)text+=' • Render env içinde VAPID_PUBLIC_KEY ve VAPID_PRIVATE_KEY lazım.'; if(s.error)text+=' • Kayıt tablosu hatası: '+s.error; el.textContent=text;}).catch(function(){el.textContent='Bildirim durumu alınamadı.'})}
@@ -4200,7 +4374,14 @@ function start() {
       console.log(`RUTH manual live support listening on http://localhost:${PORT}`);
       console.log(`Storage: ${storage.kind}`);
       console.log(`Push ready: ${Boolean(webPush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY)}`);
+      setTimeout(() => warmIkasSummary("startup").catch(() => {}), 1200);
     });
+  }
+
+  if (!ikasWarmTimer) {
+    ikasWarmTimer = setInterval(() => {
+      warmIkasSummary("interval").catch(() => {});
+    }, Math.max(60_000, Number(process.env.IKAS_AUTO_REFRESH_MS || 180000)));
   }
 
   if (!reminderTimer) {
@@ -4218,6 +4399,8 @@ function start() {
 function stop(callback) {
   if (reminderTimer) clearInterval(reminderTimer);
   reminderTimer = null;
+  if (ikasWarmTimer) clearInterval(ikasWarmTimer);
+  ikasWarmTimer = null;
   if (server.listening) return server.close(callback);
   if (callback) callback();
 }
