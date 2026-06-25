@@ -649,6 +649,19 @@ async function handleAdminApi(req, res, url) {
     return sendJson(res, { ok: true });
   }
 
+  if (req.method === "POST" && pathname === "/api/admin/ikas/payment-link") {
+    try {
+      const body = await readJson(req, 500_000);
+      const paymentLink = await generateIkasOrderPaymentLink(body && body.orderId);
+      if (!paymentLink) {
+        return sendJson(res, { ok: false, error: "empty_payment_link", message: "ikas ödeme linki boş döndü." }, 502);
+      }
+      return sendJson(res, { ok: true, paymentLink });
+    } catch (error) {
+      return sendJson(res, { ok: false, error: "payment_link_failed", message: error && error.message ? error.message : "Ödeme linki oluşturulamadı." }, 500);
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/ikas/connect") {
     const startedAt = Date.now();
     try {
@@ -1176,6 +1189,20 @@ async function ikasGraphQL(query, variables = {}, label = "ikas") {
 }
 
 
+
+
+async function generateIkasOrderPaymentLink(orderId) {
+  if (!ikasConfigured()) throw new Error("ikas_not_configured");
+  const id = String(orderId || "").trim();
+  if (!id) throw new Error("orderId_required");
+  const query = `
+    mutation RuthGenerateOrderPaymentLink($input: GenerateOrderPaymentLinkInput!) {
+      generateOrderPaymentLink(input: $input)
+    }
+  `;
+  const data = await ikasGraphQL(query, { input: { orderId: id } }, "ikas generate payment link");
+  return String(data && data.generateOrderPaymentLink || "");
+}
 
 async function fetchIkasPaginatedList({ label, rootField, fields, normalize, maxPages = 120 }) {
   const limit = 200;
@@ -5196,6 +5223,24 @@ function adminHtml(serverAdmin) {
   }
 }
 
+
+
+/* V101: real ikas payment link */
+.exchange-finance-link{
+  margin-top:8px !important;
+  font-size:12px !important;
+}
+@media(min-width:821px){
+  .exchange-finance-row{
+    grid-template-columns:minmax(0,1fr) auto auto !important;
+  }
+}
+@media(max-width:820px){
+  .exchange-finance-link{
+    font-size:13px !important;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -5803,9 +5848,9 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
         var diffHtml='<div class="exchange-price-diff"><span class="price-muted">Yeni ürün seçince fiyat farkı görünür</span><input type="hidden" class="exchange-finance-status" value="not_selected"></div>';
         if(draft.productId||draft.productName){
           var d=Number(draft.price||0)-oldPrice;
-          if(d>0)diffHtml='<div class="exchange-price-diff pay-extra"><div>Ekstra ödenecek: <b>'+money(d)+'</b></div>'+financeControlsHtml(d,draft.financeStatus)+'</div>';
-          else if(d<0)diffHtml='<div class="exchange-price-diff money-left"><div>Kalan para: <b>'+money(Math.abs(d))+'</b></div>'+financeControlsHtml(d,draft.financeStatus)+'</div>';
-          else diffHtml='<div class="exchange-price-diff price-even">Fiyat farkı yok'+financeControlsHtml(d,draft.financeStatus)+'</div>';
+          if(d>0)diffHtml='<div class="exchange-price-diff pay-extra"><div>Ekstra ödenecek: <b>'+money(d)+'</b></div>'+financeControlsHtml(d,draft.financeStatus,draft.financeLink)+'</div>';
+          else if(d<0)diffHtml='<div class="exchange-price-diff money-left"><div>Kalan para: <b>'+money(Math.abs(d))+'</b></div>'+financeControlsHtml(d,draft.financeStatus,draft.financeLink)+'</div>';
+          else diffHtml='<div class="exchange-price-diff price-even">Fiyat farkı yok'+financeControlsHtml(d,draft.financeStatus,draft.financeLink)+'</div>';
         }
         lines.push('<div class="exchange-line" data-line-id="'+escapeHtml(lineId)+'" data-base-line-id="'+escapeHtml(i.id||idx)+'" data-unit-index="'+unit+'" data-old-price="'+escapeHtml(oldPrice)+'">'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+unitLabel+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+'Eski fiyat: '+money(oldPrice)+'</div></div><div>'+productPickerHtml(draftKey)+diffHtml+'</div></div>');
       }
@@ -5828,6 +5873,7 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
       var sku=line.querySelector('.exchange-product-sku');
       var priceInput=line.querySelector('.exchange-product-price');
       var financeStatus=line.querySelector('.exchange-finance-status');
+      var financeLink=line.querySelector('.exchange-finance-link');
       if(!val||!val.value)return;
       var lineId=line.getAttribute('data-line-id')||'';
       var baseLineId=line.getAttribute('data-base-line-id')||lineId;
@@ -5837,7 +5883,7 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
       var item=(o.items||[]).find(function(i,idx){return String(i.id||idx)===String(baseLineId)})||{};
       var diff=newPrice-oldPrice;
       var defaultFinance=diff>0?'payment_pending':(diff<0?'refund_pending':'even');
-      changes.push({lineId:lineId,fromName:item.name||'Ürün',fromSku:item.sku||'',quantity:1,unitIndex:unitIndex,fromPrice:oldPrice,toPrice:newPrice,priceDiff:diff,financeStatus:financeStatus&&financeStatus.value?financeStatus.value:defaultFinance,toProductId:val.value,toVariantId:variantVal&&variantVal.value?variantVal.value:'',toProductName:name&&name.value?name.value:val.value,toVariantText:variantText&&variantText.value?variantText.value:'',toSku:sku&&sku.value?sku.value:''});
+      changes.push({lineId:lineId,fromName:item.name||'Ürün',fromSku:item.sku||'',quantity:1,unitIndex:unitIndex,fromPrice:oldPrice,toPrice:newPrice,priceDiff:diff,financeStatus:financeStatus&&financeStatus.value?financeStatus.value:defaultFinance,financeLink:financeLink&&financeLink.value?financeLink.value:'',toProductId:val.value,toVariantId:variantVal&&variantVal.value?variantVal.value:'',toProductName:name&&name.value?name.value:val.value,toVariantText:variantText&&variantText.value?variantText.value:'',toSku:sku&&sku.value?sku.value:''});
     });
     if(!changes.length){toast('Değiştirilecek ürün seç.');return;}
     var reminder=card.querySelector('.exchange-reminder-at');
@@ -6018,14 +6064,15 @@ function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFrac
     if(first)selectExchangeVariant(first);
   }
   function selectedAttr(value, selected){return String(value)===String(selected)?' selected':''}
-  function financeControlsHtml(diff, selected){
+  function financeControlsHtml(diff, selected, link){
+    link=String(link||'');
     if(diff>0){
       selected=selected||'payment_pending';
-      return '<div class="exchange-finance-row"><select class="input exchange-finance-status"><option value="payment_pending"'+selectedAttr('payment_pending',selected)+'>Ödeme bekliyor</option><option value="payment_received"'+selectedAttr('payment_received',selected)+'>Ödeme alındı</option><option value="payment_link_sent"'+selectedAttr('payment_link_sent',selected)+'>Ödeme linki gönderildi</option></select><button type="button" class="btn ghost exchange-copy-payment">Mesajı kopyala</button></div><div class="finance-note">Gerçek ikas ödeme linkini bağlamak için GenerateOrderPaymentLinkInput alanları alındı; sonraki sürümde güvenli yazma bağlanacak.</div>';
+      return '<div class="exchange-finance-row"><select class="input exchange-finance-status"><option value="payment_pending"'+selectedAttr('payment_pending',selected)+'>Ödeme bekliyor</option><option value="payment_received"'+selectedAttr('payment_received',selected)+'>Ödeme alındı</option><option value="payment_link_sent"'+selectedAttr('payment_link_sent',selected)+'>Ödeme linki gönderildi</option></select><button type="button" class="btn ghost exchange-create-payment-link">Ödeme linki oluştur</button><button type="button" class="btn ghost exchange-copy-payment">Mesajı kopyala</button></div><input class="input exchange-finance-link" readonly placeholder="Ödeme linki oluşturulunca burada görünür" value="'+escapeHtml(link)+'"><div class="finance-note">Ödeme linki ikas generateOrderPaymentLink ile gerçek siparişten oluşturulur.</div>';
     }
     if(diff<0){
       selected=selected||'refund_pending';
-      return '<div class="exchange-finance-row"><select class="input exchange-finance-status"><option value="refund_pending"'+selectedAttr('refund_pending',selected)+'>Geri ödeme bekliyor</option><option value="refund_done"'+selectedAttr('refund_done',selected)+'>Geri ödeme yapıldı</option><option value="coupon_given"'+selectedAttr('coupon_given',selected)+'>Kupon verildi</option></select><button type="button" class="btn ghost exchange-copy-refund">Mesajı kopyala</button></div><div class="finance-note">Tam otomatik iade için stockLocationId ve refund line detayları gerekir; güvenli modda durum kaydı tutulur.</div>';
+      return '<div class="exchange-finance-row"><select class="input exchange-finance-status"><option value="refund_pending"'+selectedAttr('refund_pending',selected)+'>Geri ödeme bekliyor</option><option value="refund_done"'+selectedAttr('refund_done',selected)+'>Geri ödeme yapıldı</option><option value="coupon_given"'+selectedAttr('coupon_given',selected)+'>Kupon verildi</option></select><button type="button" class="btn ghost exchange-copy-refund">Mesajı kopyala</button></div><div class="finance-note">Otomatik iade için ikas stockLocationId ve iade satırı detayları gerekir; bu sürümde güvenli takip/kopyalama yapılır.</div>';
     }
     return '<input type="hidden" class="exchange-finance-status" value="even">';
   }
@@ -6048,14 +6095,14 @@ function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFrac
     if(diff>0){
       box.className='exchange-price-diff pay-extra';
       var current=box.querySelector('.exchange-finance-status')?box.querySelector('.exchange-finance-status').value:'';
-      box.innerHTML='<div>Ekstra ödenecek: <b>'+money(diff)+'</b></div>'+financeControlsHtml(diff,current);
+      box.innerHTML='<div>Ekstra ödenecek: <b>'+money(diff)+'</b></div>'+financeControlsHtml(diff,current,'');
     }else if(diff<0){
       box.className='exchange-price-diff money-left';
       var current2=box.querySelector('.exchange-finance-status')?box.querySelector('.exchange-finance-status').value:'';
-      box.innerHTML='<div>Kalan para: <b>'+money(Math.abs(diff))+'</b></div>'+financeControlsHtml(diff,current2);
+      box.innerHTML='<div>Kalan para: <b>'+money(Math.abs(diff))+'</b></div>'+financeControlsHtml(diff,current2,'');
     }else{
       box.className='exchange-price-diff price-even';
-      box.innerHTML='Fiyat farkı yok'+financeControlsHtml(diff,'even');
+      box.innerHTML='Fiyat farkı yok'+financeControlsHtml(diff,'even','');
     }
   }
     function orderReturnRecord(o){return returnRecords.find(function(x){return String(x.orderId||'')===String(o&&o.id||'')})}
@@ -6130,7 +6177,7 @@ function renderExchangeNotes(){
         var diff=Number(ch.priceDiff||0);
         var diffText=diff>0?' • Ekstra: '+money(diff):(diff<0?' • Kalan: '+money(Math.abs(diff)):'');
         var financeMap={payment_pending:'Ödeme bekliyor',payment_received:'Ödeme alındı',payment_link_sent:'Ödeme linki gönderildi',refund_pending:'Geri ödeme bekliyor',refund_done:'Geri ödeme yapıldı',coupon_given:'Kupon verildi',even:'Fark yok'};
-        var financeText=ch.financeStatus?(' • '+(financeMap[ch.financeStatus]||ch.financeStatus)):'';
+        var financeText=ch.financeStatus?(' • '+(financeMap[ch.financeStatus]||ch.financeStatus)):''; if(ch.financeLink)financeText+=' • Ödeme linki var';
         return '<div class="exchange-note-product"><span class="changed-product-red">'+escapeHtml(ch.fromName||'Ürün')+(Number(ch.unitIndex||1)>1?' #'+Number(ch.unitIndex):'')+'</span><span class="exchange-arrow">→</span><span>'+escapeHtml(to||'Yeni ürün')+escapeHtml(diffText+financeText)+'</span></div>';
       }).join('');
       return '<div class="exchange-note"><div class="row"><div><div class="name">'+escapeHtml(rec.orderDisplay||rec.orderNumber||'Sipariş')+' — '+escapeHtml(rec.customerName||'Müşteri')+'</div><div class="note-meta">Neden: '+escapeHtml(rec.reason||'Seçilmedi')+' • '+fmtDate(rec.createdAt)+'</div></div><span class="badge exchange-done">Değişim</span></div>'+changes+'</div>';
@@ -6285,14 +6332,43 @@ function renderExchangeNotes(){
       }
     }
 
+    var createPayment=e.target.closest&&e.target.closest('.exchange-create-payment-link');
+    if(createPayment){
+      e.preventDefault();
+      var card=createPayment.closest('.exchange-order-card');
+      var line0=createPayment.closest('.exchange-line');
+      var orderId=card&&card.getAttribute('data-order-id')||'';
+      var linkInput=line0&&line0.querySelector('.exchange-finance-link');
+      var statusSel=line0&&line0.querySelector('.exchange-finance-status');
+      var wrap0=line0&&line0.querySelector('.exchange-pick-wrap');
+      createPayment.disabled=true;
+      createPayment.textContent='Oluşturuluyor...';
+      api('/api/admin/ikas/payment-link',{method:'POST',body:JSON.stringify({orderId:orderId})}).then(function(d){
+        var link=d&&d.paymentLink||'';
+        if(linkInput)linkInput.value=link;
+        if(statusSel)statusSel.value='payment_link_sent';
+        if(wrap0)saveExchangeDraft(wrap0,{financeStatus:'payment_link_sent',financeLink:link});
+        if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(link).catch(function(){});
+        toast('Ödeme linki oluşturuldu ve kopyalandı');
+      }).catch(function(err){
+        alert('Ödeme linki oluşturulamadı: '+(err&&err.message?err.message:err));
+      }).finally(function(){
+        createPayment.disabled=false;
+        createPayment.textContent='Ödeme linki oluştur';
+      });
+      return;
+    }
+
     var copyPayment=e.target.closest&&e.target.closest('.exchange-copy-payment');
     if(copyPayment){
       e.preventDefault();
       var line=copyPayment.closest('.exchange-line');
       var diffBox=line&&line.querySelector('.exchange-price-diff');
-      var amount=(diffBox&&diffBox.textContent.match(/₺\\s*[0-9.,]+/)||[''])[0];
+      var amount=(diffBox&&diffBox.textContent.match(/₺\s*[0-9.,]+/)||[''])[0];
       var product=line&&line.querySelector('.exchange-product-name')?line.querySelector('.exchange-product-name').value:'ürün';
-      var msg='Merhaba, değişim işleminizde '+(amount||'fiyat farkı')+' ek ödeme oluşmuştur. Ödeme sonrası değişim işleminizi tamamlayacağız. Yeni ürün: '+product;
+      var linkInput=line&&line.querySelector('.exchange-finance-link');
+      var link=linkInput&&linkInput.value?('\\nÖdeme linki: '+linkInput.value):'';
+      var msg='Merhaba, değişim işleminizde '+(amount||'fiyat farkı')+' ek ödeme oluşmuştur. Ödeme sonrası değişim işleminizi tamamlayacağız. Yeni ürün: '+product+link;
       navigator.clipboard&&navigator.clipboard.writeText?navigator.clipboard.writeText(msg).then(function(){toast('Ek ödeme mesajı kopyalandı')}):toast(msg);
       return;
     }
@@ -6750,7 +6826,8 @@ function addExchangeRecord(data) {
       priceDiff: Number(change.priceDiff || 0),
       unitIndex: Number(change.unitIndex || 1),
       financeStatus: String(change.financeStatus || "").slice(0, 80),
-      financeNote: String(change.financeNote || "").slice(0, 240)
+      financeNote: String(change.financeNote || "").slice(0, 240),
+      financeLink: String(change.financeLink || "").slice(0, 1000)
     })).filter((change) => change.fromName || change.toProductName) : [],
     reason: String(data.reason || "").slice(0, 120),
     note: String(data.note || "").slice(0, 1000),
