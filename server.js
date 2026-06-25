@@ -649,6 +649,28 @@ async function handleAdminApi(req, res, url) {
     return sendJson(res, { ok: true });
   }
 
+  if (req.method === "POST" && pathname === "/api/admin/ikas/exchange-sync") {
+    try {
+      const body = await readJson(req, 2_000_000);
+      const changes = Array.isArray(body && body.changes) ? body.changes : [];
+      const orderId = String(body && body.orderId || "").trim();
+      const editReason = String(body && body.editReason || "Ruth panel değişim işlemi");
+      const updateResult = await updateIkasOrderLinesForExchange(orderId, changes, editReason);
+      let paymentLink = "";
+      const needsPayment = changes.some((change) => Number(change.priceDiff || 0) > 0);
+      if (needsPayment) {
+        try {
+          paymentLink = await generateIkasOrderPaymentLink(orderId);
+        } catch (paymentError) {
+          paymentLink = "";
+        }
+      }
+      return sendJson(res, { ok: true, synced: true, order: updateResult.order, paymentLink, input: updateResult.input });
+    } catch (error) {
+      return sendJson(res, { ok: false, synced: false, error: "exchange_sync_failed", message: error && error.message ? error.message : "İkas değişim işlemi başarısız." }, 200);
+    }
+  }
+
   if (req.method === "POST" && pathname === "/api/admin/ikas/payment-link") {
     try {
       const body = await readJson(req, 500_000);
@@ -1230,6 +1252,52 @@ async function ikasGraphQL(query, variables = {}, label = "ikas") {
 
 
 
+
+
+function buildIkasOrderLineUpdateItems(changes) {
+  return (Array.isArray(changes) ? changes : []).map((change) => {
+    const orderLineItemId = String(change.baseLineId || change.lineId || "").split("::")[0];
+    const variantId = String(change.toVariantId || "").trim();
+    const price = Number(change.toPrice || 0);
+    const quantity = Math.max(1, Number(change.quantity || 1));
+    if (!orderLineItemId || !variantId || !(price >= 0)) return null;
+    return {
+      id: orderLineItemId,
+      price,
+      quantity,
+      variant: {
+        id: variantId,
+        name: String(change.toVariantText || change.toProductName || "Değişim Ürünü").slice(0, 240)
+      }
+    };
+  }).filter(Boolean);
+}
+
+async function updateIkasOrderLinesForExchange(orderId, changes, editReason = "") {
+  if (!ikasConfigured()) throw new Error("ikas_not_configured");
+  const id = String(orderId || "").trim();
+  if (!id) throw new Error("orderId_required");
+
+  const orderLineItems = buildIkasOrderLineUpdateItems(changes);
+  if (!orderLineItems.length) throw new Error("orderLineItems_required");
+
+  const query = `
+    mutation RuthUpdateOrderLine($input: UpdateOrderInput!) {
+      updateOrderLine(input: $input) {
+        id
+        orderNumber
+      }
+    }
+  `;
+  const input = {
+    orderId: id,
+    editReason: String(editReason || "Ruth panel değişim işlemi").slice(0, 500),
+    restockItems: false,
+    orderLineItems
+  };
+  const data = await ikasGraphQL(query, { input }, "ikas update order line");
+  return { order: data && data.updateOrderLine ? data.updateOrderLine : null, input };
+}
 
 async function generateIkasOrderPaymentLink(orderId) {
   if (!ikasConfigured()) throw new Error("ikas_not_configured");
@@ -5294,6 +5362,20 @@ function adminHtml(serverAdmin) {
   text-overflow:clip !important;
 }
 
+
+
+/* V103: ikas exchange sync */
+.exchange-sync{
+  min-height:44px !important;
+  border-color:rgba(216,182,111,.42) !important;
+}
+@media(max-width:820px){
+  #page-exchange .exchange-sync{
+    width:100% !important;
+    justify-content:center !important;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -5867,6 +5949,7 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     var orders=(c.orders||[]).filter(function(o){var hay=[o.number,o.orderNumber,o.customer,(o.items||[]).map(function(i){return i.name}).join(' ')].join(' ').toLowerCase(); return !term||hay.indexOf(term)>=0;});
     detail.innerHTML=orders.length?orders.map(exchangeOrderCard).join(''):'<div class="empty">Bu müşteride sipariş yok.</div>';
     qsa('.exchange-save').forEach(function(btn){btn.addEventListener('click',function(){saveExchangeForOrder(btn.getAttribute('data-order-id'))});});
+    qsa('.exchange-sync').forEach(function(btn){btn.addEventListener('click',function(){syncExchangeForOrder(btn.getAttribute('data-order-id'),btn)});});
   }
   function productPickerHtml(draftKey){
     var products=ikasSummary.products||[];
@@ -5910,13 +5993,13 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     });
     lines=lines.join('');
     var reasonOptions=['Kararma','Yeşil iz bırakma','Zincir Kopması'].map(function(r){return '<option value="'+escapeHtml(r)+'" '+(rec&&rec.reason===r?'selected':'')+'>'+escapeHtml(r)+'</option>'}).join('');
-    return '<div class="exchange-order-card" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+' — '+escapeHtml(o.customer||'')+(rec?'<span class="exchange-chip">Değişim yapıldı</span>':'')+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.packageStatus||o.status||'')+'</div></div><span class="badge '+(rec?'exchange-done':'')+'">'+(rec?'Değişim yapıldı':escapeHtml(o.packageStatus||o.status||'Yeni'))+'</span></div>'+lines+'<div class="exchange-form-row"><div class="field"><label>Değişim nedeni</label><select class="input exchange-reason"><option value="">Sebep seç</option>'+reasonOptions+'</select></div><div class="field"><label>Değişim hatırlatma zamanı</label><input class="input exchange-reminder-at" type="datetime-local" value="'+escapeHtml(rec&&rec.reminderAt?String(rec.reminderAt).slice(0,16):'')+'"></div><button class="btn gold exchange-save" data-order-id="'+escapeHtml(o.id)+'">Değişimi Kaydet</button></div></div>';
+    return '<div class="exchange-order-card" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+' — '+escapeHtml(o.customer||'')+(rec?'<span class="exchange-chip">Değişim yapıldı</span>':'')+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.packageStatus||o.status||'')+'</div></div><span class="badge '+(rec?'exchange-done':'')+'">'+(rec?'Değişim yapıldı':escapeHtml(o.packageStatus||o.status||'Yeni'))+'</span></div>'+lines+'<div class="exchange-form-row"><div class="field"><label>Değişim nedeni</label><select class="input exchange-reason"><option value="">Sebep seç</option>'+reasonOptions+'</select></div><div class="field"><label>Değişim hatırlatma zamanı</label><input class="input exchange-reminder-at" type="datetime-local" value="'+escapeHtml(rec&&rec.reminderAt?String(rec.reminderAt).slice(0,16):'')+'"></div><button class="btn gold exchange-save" data-order-id="'+escapeHtml(o.id)+'">Değişimi Kaydet</button><button class="btn ghost exchange-sync" data-order-id="'+escapeHtml(o.id)+'">İkas’a İşle</button></div></div>';
   }
-  function saveExchangeForOrder(orderId){
+  function collectExchangePayload(orderId){
     var orders=ikasSummary.orders||[];
-    var o=orders.find(function(x){return String(x.id)===String(orderId)}); if(!o)return;
+    var o=orders.find(function(x){return String(x.id)===String(orderId)}); if(!o)return null;
     var c=buildIkasCustomers().find(function(x){return x.key===selectedExchangeCustomerKey})||{};
-    var card=null; qsa('.exchange-order-card').forEach(function(x){if(String(x.getAttribute('data-order-id'))===String(orderId))card=x}); if(!card)return;
+    var card=null; qsa('.exchange-order-card').forEach(function(x){if(String(x.getAttribute('data-order-id'))===String(orderId))card=x}); if(!card)return null;
     var changes=[];
     Array.prototype.slice.call(card.querySelectorAll('.exchange-line')).forEach(function(line){
       var val=line.querySelector('.exchange-product-value');
@@ -5936,13 +6019,52 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
       var item=(o.items||[]).find(function(i,idx){return String(i.id||idx)===String(baseLineId)})||{};
       var diff=newPrice-oldPrice;
       var defaultFinance=diff>0?'payment_pending':(diff<0?'refund_pending':'even');
-      changes.push({lineId:lineId,fromName:item.name||'Ürün',fromSku:item.sku||'',quantity:1,unitIndex:unitIndex,fromPrice:oldPrice,toPrice:newPrice,priceDiff:diff,financeStatus:financeStatus&&financeStatus.value?financeStatus.value:defaultFinance,financeLink:financeLink&&financeLink.value?financeLink.value:'',toProductId:val.value,toVariantId:variantVal&&variantVal.value?variantVal.value:'',toProductName:name&&name.value?name.value:val.value,toVariantText:variantText&&variantText.value?variantText.value:'',toSku:sku&&sku.value?sku.value:''});
+      var linkValue=financeLink&&new RegExp('^https?://','i').test(String(financeLink.value||''))?financeLink.value:'';
+      changes.push({lineId:lineId,baseLineId:baseLineId,fromName:item.name||'Ürün',fromSku:item.sku||'',quantity:1,unitIndex:unitIndex,fromPrice:oldPrice,toPrice:newPrice,priceDiff:diff,financeStatus:financeStatus&&financeStatus.value?financeStatus.value:defaultFinance,financeLink:linkValue,toProductId:val.value,toVariantId:variantVal&&variantVal.value?variantVal.value:'',toProductName:name&&name.value?name.value:val.value,toVariantText:variantText&&variantText.value?variantText.value:'',toSku:sku&&sku.value?sku.value:''});
     });
-    if(!changes.length){toast('Değiştirilecek ürün seç.');return;}
     var reminder=card.querySelector('.exchange-reminder-at');
     var reason=card.querySelector('.exchange-reason');
-    api('/api/admin/exchanges',{method:'POST',body:JSON.stringify({customerKey:c.key||'',customerName:c.name||o.customer||'',customerPhone:c.phone||o.phone||'',customerEmail:c.email||o.email||'',orderId:o.id,orderNumber:o.orderNumber||'',orderDisplay:o.number||o.orderNumber||'',changes:changes,reason:reason&&reason.value||'',reminderAt:reminder&&reminder.value||''})}).then(function(){Object.keys(exchangeDrafts).forEach(function(k){if(k.indexOf(String(o.id)+'::')===0)delete exchangeDrafts[k]}); toast('Değişim kaydedildi'); return loadExchangeRecords();}).then(function(){renderExchange(); renderIkas(); renderExchangeNotes();}).catch(function(err){alert('Değişim kaydedilemedi: '+err.message)});
+    return {card:card, order:o, customer:c, changes:changes, payload:{customerKey:c.key||'',customerName:c.name||o.customer||'',customerPhone:c.phone||o.phone||'',customerEmail:c.email||o.email||'',orderId:o.id,orderNumber:o.orderNumber||'',orderDisplay:o.number||o.orderNumber||'',changes:changes,reason:reason&&reason.value||'',reminderAt:reminder&&reminder.value||''}};
   }
+
+  function saveExchangeForOrder(orderId){
+    var pack=collectExchangePayload(orderId);
+    if(!pack)return;
+    if(!pack.changes.length){toast('Değiştirilecek ürün seç.');return;}
+    api('/api/admin/exchanges',{method:'POST',body:JSON.stringify(pack.payload)}).then(function(){Object.keys(exchangeDrafts).forEach(function(k){if(k.indexOf(String(pack.order.id)+'::')===0)delete exchangeDrafts[k]}); toast('Değişim kaydedildi'); return loadExchangeRecords();}).then(function(){renderExchange(); renderIkas(); renderExchangeNotes();}).catch(function(err){alert('Değişim kaydedilemedi: '+err.message)});
+  }
+
+  function syncExchangeForOrder(orderId,btn){
+    var pack=collectExchangePayload(orderId);
+    if(!pack)return;
+    if(!pack.changes.length){toast('Önce değiştirilecek ürünü seç.');return;}
+    var missing=pack.changes.filter(function(ch){return !ch.toVariantId || !ch.baseLineId || !(Number(ch.toPrice)>=0)});
+    if(missing.length){alert('İkas’a işlemek için ürün varyantı ve fiyatı tam olmalı.');return;}
+    if(!confirm('Bu işlem ikas sipariş satırını GERÇEKTEN değiştirecek. Devam edilsin mi?'))return;
+    var oldText=btn&&btn.textContent||'İkas’a İşle';
+    if(btn){btn.disabled=true;btn.textContent='İşleniyor...';}
+    api('/api/admin/ikas/exchange-sync',{method:'POST',body:JSON.stringify({orderId:pack.order.id,changes:pack.changes,editReason:'Ruth panel değişim: '+(pack.payload.reason||'Değişim')})}).then(function(d){
+      if(!d||!d.ok){throw new Error(d&&d.message?d.message:'İkas işlemi başarısız');}
+      var link=d.paymentLink||'';
+      if(link){
+        Array.prototype.slice.call(pack.card.querySelectorAll('.exchange-finance-link')).forEach(function(input){input.value=link});
+        Array.prototype.slice.call(pack.card.querySelectorAll('.exchange-finance-status')).forEach(function(sel){if(sel.tagName==='SELECT')sel.value='payment_link_sent'});
+        pack.changes=pack.changes.map(function(ch){if(Number(ch.priceDiff||0)>0){ch.financeStatus='payment_link_sent';ch.financeLink=link;ch.ikasSyncStatus='success'}return ch;});
+      }else{
+        pack.changes=pack.changes.map(function(ch){ch.ikasSyncStatus='success';return ch;});
+      }
+      pack.payload.changes=pack.changes;
+      return api('/api/admin/exchanges',{method:'POST',body:JSON.stringify(pack.payload)}).then(function(){return d});
+    }).then(function(d){
+      toast(d.paymentLink?'İkas’a işlendi, ödeme linki oluşturuldu':'İkas’a işlendi');
+      return loadIkasSummary(false,true).then(function(){return loadExchangeRecords()});
+    }).catch(function(err){
+      alert('İkas’a işlenemedi: '+(err&&err.message?err.message:err));
+    }).finally(function(){
+      if(btn){btn.disabled=false;btn.textContent=oldText;}
+    });
+  }
+
   
 
 function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFractionDigits:2})}
@@ -6888,6 +7010,7 @@ function addExchangeRecord(data) {
     orderDisplay: String(data.orderDisplay || "").slice(0, 120),
     changes: Array.isArray(data.changes) ? data.changes.map((change) => ({
       lineId: String(change.lineId || "").slice(0, 160),
+      baseLineId: String(change.baseLineId || "").slice(0, 160),
       fromName: String(change.fromName || "").slice(0, 240),
       fromSku: String(change.fromSku || "").slice(0, 120),
       quantity: Number(change.quantity || 0),
@@ -6902,7 +7025,9 @@ function addExchangeRecord(data) {
       unitIndex: Number(change.unitIndex || 1),
       financeStatus: String(change.financeStatus || "").slice(0, 80),
       financeNote: String(change.financeNote || "").slice(0, 240),
-      financeLink: String(change.financeLink || "").slice(0, 1000)
+      financeLink: String(change.financeLink || "").slice(0, 1000),
+      ikasSyncStatus: String(change.ikasSyncStatus || "").slice(0, 80),
+      ikasSyncError: String(change.ikasSyncError || "").slice(0, 500)
     })).filter((change) => change.fromName || change.toProductName) : [],
     reason: String(data.reason || "").slice(0, 120),
     note: String(data.note || "").slice(0, 1000),
