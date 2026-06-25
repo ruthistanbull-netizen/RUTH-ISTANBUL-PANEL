@@ -637,9 +637,30 @@ async function handleAdminApi(req, res, url) {
         });
       }
 
+      const quickErrors = [];
       await withTimeout((async () => {
         await getIkasAccessToken();
-        await ikasGraphQL(`query RuthQuickConnect { __schema { queryType { name } } }`, {}, "ikas quick connect");
+
+        let orderOk = false;
+        let productOk = false;
+
+        try {
+          await ikasGraphQL(`query RuthQuickOrder { listOrder(pagination: { limit: 1, page: 1 }) { count data { id orderNumber } } }`, {}, "ikas quick order");
+          orderOk = true;
+        } catch (error) {
+          quickErrors.push(error && error.message ? error.message : String(error));
+        }
+
+        try {
+          await ikasGraphQL(`query RuthQuickProduct { listProduct(pagination: { limit: 1, page: 1 }) { count data { id name } } }`, {}, "ikas quick product");
+          productOk = true;
+        } catch (error) {
+          quickErrors.push(error && error.message ? error.message : String(error));
+        }
+
+        if (!orderOk && !productOk) {
+          throw new Error(quickErrors.join(" || ").slice(0, 900) || "ikas gerçek veri sorgusu başarısız");
+        }
       })(), 5000, "ikas bağlantısı 5 saniye içinde tamamlanamadı");
 
       ikasLastWarm = { ok: true, at: new Date().toISOString(), error: "" };
@@ -651,8 +672,9 @@ async function handleAdminApi(req, res, url) {
       return sendJson(res, {
         ok: true,
         connected: true,
-        status: "connected",
-        message: "Bağlandı",
+        verified: true,
+        status: "verified",
+        message: "ikas bağlantısı doğrulandı, veriler yükleniyor",
         elapsedMs: Date.now() - startedAt
       });
     } catch (error) {
@@ -3357,6 +3379,10 @@ function adminHtml(serverAdmin) {
   color:#77cc92 !important;
   text-shadow:0 0 12px rgba(119,204,146,.16);
 }
+#ikasStatus.ikas-failed{
+  color:#ff8a7a !important;
+  text-shadow:0 0 12px rgba(255,100,90,.12);
+}
 @keyframes ikasDots{
   0%{content:""}
   25%{content:"."}
@@ -3663,54 +3689,70 @@ function adminHtml(serverAdmin) {
 
   function loadConversations(silent){ return api('/api/admin/conversations').then(function(d){conversations=d.conversations||[]; renderAll(); if(activeId){ if(activeRoute==='support')loadMessages(activeId,true); if(activeRoute==='crm')loadCrmDetail(activeId,true); }}).catch(function(err){if(!silent)toast(err.message)})}
   function loadReminders(){return api('/api/admin/reminders/due').then(function(d){reminders=d.reminders||[]; renderReminders()}).catch(function(){})}
+  function ikasHasVisibleData(s){
+    return Boolean(s && (((s.orders||[]).length) || ((s.products||[]).length) || ((s.collections||[]).length) || ((s.readyOrders||[]).length) || ((s.readyProductTotals||[]).length)));
+  }
+  function isIkasActuallyConnected(s){
+    if(!s || !s.connected || s.ikasError)return false;
+    if(ikasHasVisibleData(s))return true;
+    if(s.orderError && s.productError)return false;
+    return false;
+  }
+  function ikasCurrentStatusText(){
+    if(ikasLoading && !isIkasActuallyConnected(ikasSummary))return 'Bağlanıyor';
+    if(isIkasActuallyConnected(ikasSummary))return 'Bağlandı';
+    if(ikasSummary && (ikasSummary.ikasError || (ikasSummary.orderError && ikasSummary.productError)))return 'Bağlanamadı';
+    return 'Bağlanıyor';
+  }
   function setIkasStatusText(value){
     setText('ikasStatus', value);
     var el=$('ikasStatus');
     if(el){
       el.classList.toggle('ikas-connecting', value==='Bağlanıyor');
       el.classList.toggle('ikas-connected', value==='Bağlandı');
+      el.classList.toggle('ikas-failed', value==='Bağlanamadı');
     }
   }
   function connectIkasFast(){
-    if(ikasConnectedFast || ikasConnecting) return Promise.resolve(ikasConnectedFast);
+    if(ikasConnecting) return Promise.resolve(false);
     ikasConnecting=true;
     setIkasStatusText('Bağlanıyor');
     return api('/api/admin/ikas/connect').then(function(d){
       if(d && d.connected){
-        ikasConnectedFast=true;
-        setIkasStatusText('Bağlandı');
+        // Sadece API doğrulandı. Tam veri gelmeden "Bağlandı" yazma.
+        setIkasStatusText('Bağlanıyor');
         return true;
       }
-      setIkasStatusText('Bağlanıyor');
-      setTimeout(function(){ if(token && !ikasConnectedFast) connectIkasFast(); }, 2500);
+      setIkasStatusText('Bağlanamadı');
+      setTimeout(function(){ if(token && !isIkasActuallyConnected(ikasSummary)) connectIkasFast(); }, 3000);
       return false;
     }).catch(function(){
-      setIkasStatusText('Bağlanıyor');
-      setTimeout(function(){ if(token && !ikasConnectedFast) connectIkasFast(); }, 2500);
+      setIkasStatusText('Bağlanamadı');
+      setTimeout(function(){ if(token && !isIkasActuallyConnected(ikasSummary)) connectIkasFast(); }, 3000);
       return false;
     }).finally(function(){ikasConnecting=false;});
   }
   function loadIkasSummary(silent,force){
     if(ikasLoading)return Promise.resolve(ikasSummary);
     ikasLoading=true;
-    if(!ikasConnectedFast) connectIkasFast();
-    setIkasStatusText(ikasConnectedFast?'Bağlandı':'Bağlanıyor');
+    if(!isIkasActuallyConnected(ikasSummary)) connectIkasFast();
+    setIkasStatusText('Bağlanıyor');
     var url='/api/admin/ikas/summary'+(force?'?refresh=1':'');
     return api(url).then(function(d){
       ikasSummary=d||ikasSummary;
-      if(ikasSummary.connected){
-        ikasConnectedFast=true;
-        setIkasStatusText('Bağlandı');
-      }
+      ikasConnectedFast=isIkasActuallyConnected(ikasSummary);
+      setIkasStatusText(ikasConnectedFast?'Bağlandı':ikasCurrentStatusText());
       renderIkas();
       return ikasSummary;
     }).catch(function(err){
       ikasSummary.ikasError=err&&err.message?err.message:'ikas bağlantısı kurulamadı';
+      ikasConnectedFast=false;
+      setIkasStatusText('Bağlanamadı');
       if(!silent)toast('ikas bağlantısı yenilenemedi');
       renderIkas();
       if(token)setTimeout(function(){loadIkasSummary(true,false)},5000);
       return ikasSummary;
-    }).finally(function(){ikasLoading=false;});
+    }).finally(function(){ikasLoading=false; setIkasStatusText(ikasCurrentStatusText());});
   }
   function itemInDate(value){if(datePreset==='all')return true; var t=Date.parse(value||''); if(!t)return false; var r=activeDateRange(); return t>=r.start&&t<r.end}
   function renderAll(){ var datedConversations=conversations.filter(function(c){return itemInDate(c.updatedAt||c.lastCustomerMessageAt||c.createdAt)}); var open=datedConversations.filter(function(c){return c.status!=='closed'}).length; var unread=datedConversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0); var datedReminders=reminders.filter(function(r){return itemInDate(r.reminderAt||r.createdAt)}); setText('statOpen',open); setText('statUnread',unread); setText('statReminders',datedReminders.length); setText('badgeSupport',conversations.reduce(function(a,c){return a+Number(c.unreadAdminCount||0)},0)); setText('topBadge',unread); renderRecent(); renderConversations(); renderCustomers(); renderReminders(); }
@@ -3818,7 +3860,7 @@ function adminHtml(serverAdmin) {
     var collections=ikasSummary.collections||[];
     var units=orders.reduce(function(sum,o){return sum+(o.items||[]).reduce(function(s,i){return s+Number(i.quantity||0)},0)},0);
     var readyUnits=readyOrders.reduce(function(sum,o){return sum+(o.items||[]).reduce(function(s,i){return s+Number(i.quantity||0)},0)},0);
-    setText('statOrders',orders.length||0); setText('badgeOrders',orders.length||0); setText('ordersToday',orders.length||0); setText('unitsToday',units||0); setText('kindsToday',readyProducts.length||allProducts.length||0); setText('ordersTotal',orders.length||0); setText('unitsTotal',readyUnits||units||0); setText('productKinds',allProducts.length||readyProducts.length||0); setIkasStatusText(ikasLoading&&!ikasConnectedFast?'Bağlanıyor':((ikasSummary.connected||ikasConnectedFast)?'Bağlandı':'Bağlanıyor')); setText('readyOrdersBadge',readyOrders.length||0); setText('badgeReadyOrders',readyOrders.length||0); setText('allOrdersBadge',orders.length||0); setText('deliveredOrdersBadge',delivered.length||0);
+    setText('statOrders',orders.length||0); setText('badgeOrders',orders.length||0); setText('ordersToday',orders.length||0); setText('unitsToday',units||0); setText('kindsToday',readyProducts.length||allProducts.length||0); setText('ordersTotal',orders.length||0); setText('unitsTotal',readyUnits||units||0); setText('productKinds',allProducts.length||readyProducts.length||0); setIkasStatusText(ikasCurrentStatusText()); setText('readyOrdersBadge',readyOrders.length||0); setText('badgeReadyOrders',readyOrders.length||0); setText('allOrdersBadge',orders.length||0); setText('deliveredOrdersBadge',delivered.length||0);
     var top=$('topProducts'); if(top){ top.innerHTML=readyProducts.length?readyProducts.slice(0,5).map(function(p,i){return '<div class="rail-product">'+imgHtml(p.image,'')+'<div><div class="name">'+(i+1)+'. '+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+Number(p.quantity||0)+' adet • Kargoya hazır</div></div></div>'}).join(''):'<div class="empty">Kargoya hazır ürün bulunamadı.</div>'; }
     var el=$('productTotals'); if(el){ el.innerHTML=readyProducts.length?readyProducts.map(readyProductRow).join(''):'<div class="empty">Kargoya hazır olarak işaretlenmiş siparişlerde ürün yok.</div>'; }
     var list=$('ordersList'); if(list){ if(orders.length){var pg=pagedHtml(orders,ordersPage,10,'orders',orderCard); ordersPage=pg.page; list.innerHTML=pg.html;} else {list.innerHTML=(ikasSummary.ikasError?'<div class="empty">'+escapeHtml(ikasSummary.ikasError)+'</div>':'<div class="empty">Henüz canlı sipariş verisi bağlı değil.</div>');} }
