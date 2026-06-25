@@ -654,11 +654,15 @@ async function handleAdminApi(req, res, url) {
       const body = await readJson(req, 500_000);
       const paymentLink = await generateIkasOrderPaymentLink(body && body.orderId);
       if (!paymentLink) {
-        return sendJson(res, { ok: false, error: "empty_payment_link", message: "ikas ödeme linki boş döndü." }, 502);
+        return sendJson(res, {
+          ok: false,
+          error: "empty_payment_link",
+          message: "ikas ödeme linki boş döndü. Bu genelde siparişte ikas tarafında ödenmemiş ek tutar oluşmadığında olur. Önce değişimi ikas siparişine işlememiz gerekiyor."
+        }, 200);
       }
       return sendJson(res, { ok: true, paymentLink });
     } catch (error) {
-      return sendJson(res, { ok: false, error: "payment_link_failed", message: error && error.message ? error.message : "Ödeme linki oluşturulamadı." }, 500);
+      return sendJson(res, { ok: false, error: "payment_link_failed", message: error && error.message ? error.message : "Ödeme linki oluşturulamadı." }, 200);
     }
   }
 
@@ -762,6 +766,42 @@ async function handleAdminApi(req, res, url) {
       sampleProducts: (summary.products || []).slice(0, 10).map((p) => ({ name: p.name, image: p.image || "" })),
       updatedAt: summary.updatedAt || ""
     });
+  }
+
+  if (req.method === "GET" && pathname === "/api/admin/ikas/order-line-input-debug") {
+    try {
+      const query = `
+        query {
+          schema: __schema {
+            types {
+              kind
+              name
+              inputFields {
+                name
+                type { kind name ofType { kind name ofType { kind name ofType { kind name } } } }
+              }
+            }
+          }
+          UpdateOrderInput: __type(name:"UpdateOrderInput") { inputFields { name type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } }
+          GenerateOrderPaymentLinkInput: __type(name:"GenerateOrderPaymentLinkInput") { inputFields { name type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } }
+          OrderRefundInput: __type(name:"OrderRefundInput") { inputFields { name type { kind name ofType { kind name ofType { kind name ofType { kind name } } } } } }
+        }
+      `;
+      const data = await ikasGraphQL(query, {}, "ikas order line input debug");
+      const allTypes = (((data || {}).schema || {}).types || []).filter((type) => type && type.kind === "INPUT_OBJECT" && /Order|Line|Refund|Payment|Transaction|Package|Stock/i.test(type.name || ""));
+      return sendJson(res, {
+        ok: true,
+        message: "updateOrderLine için orderLineItems içindeki gerçek input tiplerini gösterir.",
+        candidateInputTypes: allTypes.map((type) => ({ name: type.name, inputFields: type.inputFields || [] })),
+        topLevel: {
+          UpdateOrderInput: data.UpdateOrderInput || null,
+          GenerateOrderPaymentLinkInput: data.GenerateOrderPaymentLinkInput || null,
+          OrderRefundInput: data.OrderRefundInput || null
+        }
+      });
+    } catch (error) {
+      return sendJson(res, { ok: false, error: "order_line_input_debug_failed", message: error && error.message ? error.message : "order_line_input_debug_failed" }, 500);
+    }
   }
 
   if (req.method === "GET" && pathname === "/api/admin/ikas/input-debug") {
@@ -5241,6 +5281,19 @@ function adminHtml(serverAdmin) {
   }
 }
 
+
+
+/* V102: empty payment link handling + order line debug */
+#ikasOrderLineDebugOut{
+  max-height:340px;
+  overflow:auto;
+  white-space:pre-wrap;
+}
+.exchange-finance-link{
+  white-space:normal !important;
+  text-overflow:clip !important;
+}
+
 </style>
 </head>
 <body>
@@ -5409,7 +5462,7 @@ function adminHtml(serverAdmin) {
         </div>
 
         <div id="page-integration" class="page">
-          <div class="page-head"><div><div class="page-title">ikas Entegrasyonu</div><div class="page-sub">Sipariş, ürün, koleksiyon ve hazırlık listelerini ayrı ayrı yönet.</div></div><div class="head-tools"><button class="btn gold" data-route="ikas-orders">Tüm Siparişler →</button><button id="ikasVariantDebugBtn" class="btn ghost">Varyant / Mutation Kontrol Et</button><button id="ikasInputDebugBtn" class="btn ghost">Ödeme / İade Alanlarını Kontrol Et</button></div></div>
+          <div class="page-head"><div><div class="page-title">ikas Entegrasyonu</div><div class="page-sub">Sipariş, ürün, koleksiyon ve hazırlık listelerini ayrı ayrı yönet.</div></div><div class="head-tools"><button class="btn gold" data-route="ikas-orders">Tüm Siparişler →</button><button id="ikasVariantDebugBtn" class="btn ghost">Varyant / Mutation Kontrol Et</button><button id="ikasInputDebugBtn" class="btn ghost">Ödeme / İade Alanlarını Kontrol Et</button><button id="ikasOrderLineDebugBtn" class="btn ghost">Sipariş Satırı Alanlarını Kontrol Et</button></div></div>
           <div class="modules">
             <button class="module" data-route="ikas-orders"><div class="module-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 7.5h11l1.1 13h-13.2l1.1-13Z"/><path d="M9 7.5a3 3 0 0 1 6 0"/><path d="M9 12h6"/><path d="M9 15.5h4"/></svg></div><h3>TÜM SİPARİŞLER</h3><p>En güncel siparişler en üstte, durumları ve ürünleriyle görünür.</p><span class="btn gold">Aç →</span></button>
             <button class="module" data-route="ikas-products"><div class="module-ico">◇</div><h3>TÜM ÜRÜNLER</h3><p>Ürün adı, fotoğraf, varyant, SKU ve stok bilgileri.</p><span class="btn gold">Aç →</span></button>
@@ -5426,7 +5479,7 @@ function adminHtml(serverAdmin) {
         <div id="page-ikas-collections" class="page"><div class="page-head"><div><div class="page-title">Tüm Koleksiyonlar</div><div class="page-sub">ikas kategori/koleksiyonları ve içindeki ürünler.</div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div><div id="ikasAllCollections" class="panel-body"><div class="empty">Koleksiyonlar yükleniyor...</div></div></div>
         <div id="page-ikas-ready-orders" class="page"><div class="page-head"><div><div class="page-title">Hazırlanacak Siparişler</div><div class="page-sub">Sadece kargoya hazır durumundaki siparişler.</div></div><div class="head-tools"><div class="date-filter" data-date-filter><select class="date-select" data-date-preset><option value="today">Bugün</option><option value="yesterday">Dün</option><option value="this_week">Bu hafta</option><option value="last_week">Geçen hafta</option><option value="this_month">Bu ay</option><option value="last_month">Geçen ay</option><option value="this_year">Bu yıl</option><option value="custom">Özel tarih</option><option value="all">Tüm zamanlar</option></select><div class="date-custom"><input class="date-input" type="date" data-date-start><span class="time">-</span><input class="date-input" type="date" data-date-end></div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div></div><div id="ikasReadyOrders" class="panel-body"><div class="empty">Hazırlanacak siparişler yükleniyor...</div></div></div>
         <div id="page-ikas-ready-products" class="page"><div class="page-head"><div><div class="page-title">Hazırlanacak Ürün Toplamları</div><div class="page-sub">Kargoya hazır siparişlerden birleştirilmiş ürün hazırlık listesi.</div></div><div class="head-tools"><div class="date-filter" data-date-filter><select class="date-select" data-date-preset><option value="today">Bugün</option><option value="yesterday">Dün</option><option value="this_week">Bu hafta</option><option value="last_week">Geçen hafta</option><option value="this_month">Bu ay</option><option value="last_month">Geçen ay</option><option value="this_year">Bu yıl</option><option value="custom">Özel tarih</option><option value="all">Tüm zamanlar</option></select><div class="date-custom"><input class="date-input" type="date" data-date-start><span class="time">-</span><input class="date-input" type="date" data-date-end></div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div></div><div id="ikasReadyProductTotals" class="panel-body"><div class="empty">Ürün toplamları yükleniyor...</div></div></div>
-        <div class="card"><div class="card-title">Varyant ve Mutation API Kontrolü</div><pre id="ikasVariantDebugOut" class="debug-box">Henüz kontrol edilmedi. Butona basınca varyant başlık alanları ve sipariş düzenleme mutationları görünecek.</pre><div class="card"><div class="card-title">Ödeme / İade Input Kontrolü</div><pre id="ikasInputDebugOut" class="debug-box">Henüz kontrol edilmedi.</pre></div></div><div id="page-notifications" class="page"><div class="page-head"><div><div class="page-title">Bildirimler</div><div class="page-sub">Telefona canlı destek bildirimi gelsin diye bu cihazı kaydet.</div></div></div><div class="module-grid"><div class="module" style="align-items:flex-start;text-align:left"><div class="module-ico">🔔</div><h3>Telefon Bildirimleri</h3><p id="pushStatusText">Bildirim durumu kontrol ediliyor...</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button id="pushSetupBtn" class="btn gold" type="button">Bu Telefonda Bildirimi Aç</button><button id="pushTestBtn" class="btn ghost" type="button">Test Bildirimi Gönder</button></div><p class="page-sub" style="margin-top:12px">iPhone kullanıyorsan: Safari’de paneli aç → Paylaş → Ana Ekrana Ekle → ana ekrandan aç → bu butona bas. Safari sekmesinden bildirim gelmeyebilir.</p></div></div></div>
+        <div class="card"><div class="card-title">Varyant ve Mutation API Kontrolü</div><pre id="ikasVariantDebugOut" class="debug-box">Henüz kontrol edilmedi. Butona basınca varyant başlık alanları ve sipariş düzenleme mutationları görünecek.</pre><div class="card"><div class="card-title">Ödeme / İade Input Kontrolü</div><pre id="ikasInputDebugOut" class="debug-box">Henüz kontrol edilmedi.</pre><div class="card"><div class="card-title">Sipariş Satırı Input Kontrolü</div><pre id="ikasOrderLineDebugOut" class="debug-box">Henüz kontrol edilmedi.</pre></div></div></div><div id="page-notifications" class="page"><div class="page-head"><div><div class="page-title">Bildirimler</div><div class="page-sub">Telefona canlı destek bildirimi gelsin diye bu cihazı kaydet.</div></div></div><div class="module-grid"><div class="module" style="align-items:flex-start;text-align:left"><div class="module-ico">🔔</div><h3>Telefon Bildirimleri</h3><p id="pushStatusText">Bildirim durumu kontrol ediliyor...</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button id="pushSetupBtn" class="btn gold" type="button">Bu Telefonda Bildirimi Aç</button><button id="pushTestBtn" class="btn ghost" type="button">Test Bildirimi Gönder</button></div><p class="page-sub" style="margin-top:12px">iPhone kullanıyorsan: Safari’de paneli aç → Paylaş → Ana Ekrana Ekle → ana ekrandan aç → bu butona bas. Safari sekmesinden bildirim gelmeyebilir.</p></div></div></div>
         <div id="page-products" class="page"><div class="page-title">Ürünler</div><p class="page-sub">ikas ürün listesi bağlanınca burada görünecek.</p></div>
         <div id="page-reports" class="page"><div class="page-title">Raporlar</div><p class="page-sub">Satış ve destek raporları burada hazırlanacak.</p></div>
         <div id="page-settings" class="page"><div class="page-title">Ayarlar</div><p class="page-sub">Panel ayarları burada olacak.</p></div>
@@ -6343,15 +6396,26 @@ function renderExchangeNotes(){
       var wrap0=line0&&line0.querySelector('.exchange-pick-wrap');
       createPayment.disabled=true;
       createPayment.textContent='Oluşturuluyor...';
+      if(linkInput)linkInput.value='İkas ödeme linki oluşturuluyor...';
       api('/api/admin/ikas/payment-link',{method:'POST',body:JSON.stringify({orderId:orderId})}).then(function(d){
-        var link=d&&d.paymentLink||'';
-        if(linkInput)linkInput.value=link;
-        if(statusSel)statusSel.value='payment_link_sent';
-        if(wrap0)saveExchangeDraft(wrap0,{financeStatus:'payment_link_sent',financeLink:link});
-        if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(link).catch(function(){});
-        toast('Ödeme linki oluşturuldu ve kopyalandı');
+        if(d&&d.ok&&d.paymentLink){
+          var link=d.paymentLink||'';
+          if(linkInput)linkInput.value=link;
+          if(statusSel)statusSel.value='payment_link_sent';
+          if(wrap0)saveExchangeDraft(wrap0,{financeStatus:'payment_link_sent',financeLink:link});
+          if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(link).catch(function(){});
+          toast('Ödeme linki oluşturuldu ve kopyalandı');
+        }else{
+          var msg=(d&&d.message)||'İkas ödeme linki boş döndü. Önce değişimi ikas siparişine işlememiz gerekiyor.';
+          if(linkInput)linkInput.value=msg;
+          if(statusSel)statusSel.value='payment_pending';
+          if(wrap0)saveExchangeDraft(wrap0,{financeStatus:'payment_pending',financeLink:''});
+          toast('İkas ödeme linki boş döndü');
+        }
       }).catch(function(err){
-        alert('Ödeme linki oluşturulamadı: '+(err&&err.message?err.message:err));
+        var msg2='Ödeme linki oluşturulamadı: '+(err&&err.message?err.message:err);
+        if(linkInput)linkInput.value=msg2;
+        toast('Ödeme linki oluşturulamadı');
       }).finally(function(){
         createPayment.disabled=false;
         createPayment.textContent='Ödeme linki oluştur';
@@ -6367,7 +6431,7 @@ function renderExchangeNotes(){
       var amount=(diffBox&&diffBox.textContent.match(/₺\s*[0-9.,]+/)||[''])[0];
       var product=line&&line.querySelector('.exchange-product-name')?line.querySelector('.exchange-product-name').value:'ürün';
       var linkInput=line&&line.querySelector('.exchange-finance-link');
-      var link=linkInput&&linkInput.value?('\\nÖdeme linki: '+linkInput.value):'';
+      var rawLink=linkInput&&linkInput.value?String(linkInput.value):''; var link=/^https?:\/\//i.test(rawLink)?('\\nÖdeme linki: '+rawLink):'';
       var msg='Merhaba, değişim işleminizde '+(amount||'fiyat farkı')+' ek ödeme oluşmuştur. Ödeme sonrası değişim işleminizi tamamlayacağız. Yeni ürün: '+product+link;
       navigator.clipboard&&navigator.clipboard.writeText?navigator.clipboard.writeText(msg).then(function(){toast('Ek ödeme mesajı kopyalandı')}):toast(msg);
       return;
@@ -6484,6 +6548,17 @@ function renderExchangeNotes(){
     }).catch(function(err){
       if(out)out.textContent='Hata: '+(err&&err.message?err.message:err);
       toast('Ödeme/iade kontrolü hata verdi');
+    });
+  });
+  on('ikasOrderLineDebugBtn','click',function(){
+    var out=$('ikasOrderLineDebugOut');
+    if(out)out.textContent='Kontrol ediliyor...';
+    api('/api/admin/ikas/order-line-input-debug').then(function(d){
+      if(out)out.textContent=JSON.stringify(d,null,2);
+      toast('Sipariş satırı alanları kontrol edildi');
+    }).catch(function(err){
+      if(out)out.textContent='Hata: '+(err&&err.message?err.message:err);
+      toast('Sipariş satırı kontrolü hata verdi');
     });
   });
   on('pushBtn','click',subscribePush); on('pushSetupBtn','click',subscribePush); on('pushTestBtn','click',sendTestPush);
