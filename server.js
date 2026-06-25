@@ -628,6 +628,22 @@ async function handleAdminApi(req, res, url) {
   if (req.method === "GET" && pathname === "/api/admin/ikas/connect") {
     const startedAt = Date.now();
     try {
+      if (ikasSummaryCache.value) {
+        const cached = ikasSummaryCache.value;
+        const hasData = Boolean(((cached.orders || []).length) || ((cached.products || []).length) || ((cached.collections || []).length) || ((cached.readyOrders || []).length) || ((cached.readyProductTotals || []).length));
+        if (cached.connected && hasData && !cached.ikasError) {
+          return sendJson(res, {
+            ok: true,
+            connected: true,
+            verified: true,
+            cached: true,
+            status: "verified",
+            message: "Bağlandı",
+            elapsedMs: Date.now() - startedAt
+          });
+        }
+      }
+
       if (!ikasConfigured()) {
         return sendJson(res, {
           ok: true,
@@ -713,10 +729,37 @@ async function handleAdminApi(req, res, url) {
 
   if (req.method === "GET" && pathname === "/api/admin/ikas/summary") {
     try {
+      const fast = url.searchParams.get("fast") === "1";
       if (url.searchParams.get("refresh") === "1") {
         ikasSummaryCache = { expiresAt: 0, value: null };
       }
-      const summary = await buildIkasSummary();
+
+      if (fast && !ikasSummaryCache.value) {
+        if (!ikasSummaryInFlight) {
+          ikasSummaryInFlight = buildIkasSummaryFresh().finally(() => {
+            ikasSummaryInFlight = null;
+          });
+        }
+        return sendJson(res, {
+          ok: true,
+          connected: false,
+          connecting: true,
+          status: "connecting",
+          message: "ikas verisi yükleniyor",
+          autoConnected: false,
+          lastWarm: ikasLastWarm,
+          totals: { orders: 0, units: 0, readyOrders: 0, readyUnits: 0, deliveredOrders: 0, revenue: 0, products: 0, collections: 0 },
+          productTotals: [],
+          readyProductTotals: [],
+          orders: [],
+          readyOrders: [],
+          deliveredOrders: [],
+          products: [],
+          collections: []
+        });
+      }
+
+      const summary = await buildIkasSummary({ staleOk: fast });
       return sendJson(res, { ok: true, autoConnected: Boolean(ikasLastWarm.ok || summary.connected), lastWarm: ikasLastWarm, ...summary });
     } catch (error) {
       console.error("ikas summary error:", error && error.message ? error.message : error);
@@ -1410,14 +1453,31 @@ function buildCollectionsFromProducts(products, categories = []) {
   return [...map.values()].filter((item) => item.productCount || item.id !== "uncategorized").sort((a, b) => Number(b.productCount || 0) - Number(a.productCount || 0) || String(a.name).localeCompare(String(b.name), "tr"));
 }
 
-async function buildIkasSummary() {
-  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 120000));
-  if (cacheMs && ikasSummaryCache.value && ikasSummaryCache.expiresAt > Date.now()) {
-    return ikasSummaryCache.value;
+async function buildIkasSummary(options = {}) {
+  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 300000));
+  const now = Date.now();
+  const staleOk = Boolean(options && options.staleOk);
+
+  if (ikasSummaryCache.value) {
+    const isFresh = !cacheMs || ikasSummaryCache.expiresAt > now;
+    if (isFresh || staleOk) {
+      if (!isFresh && staleOk && !ikasSummaryInFlight) {
+        ikasSummaryInFlight = buildIkasSummaryFresh().finally(() => {
+          ikasSummaryInFlight = null;
+        });
+      }
+      return {
+        ...ikasSummaryCache.value,
+        stale: !isFresh,
+        refreshing: Boolean(ikasSummaryInFlight)
+      };
+    }
   }
+
   if (ikasSummaryInFlight) {
     return await ikasSummaryInFlight;
   }
+
   ikasSummaryInFlight = buildIkasSummaryFresh().finally(() => {
     ikasSummaryInFlight = null;
   });
@@ -1443,7 +1503,7 @@ async function warmIkasSummary(reason = "auto") {
 }
 
 async function buildIkasSummaryFresh() {
-  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 120000));
+  const cacheMs = Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 300000));
   if (!ikasConfigured()) {
     return {
       connected: false,
@@ -1531,7 +1591,7 @@ async function buildIkasSummaryFresh() {
     collections,
     categories
   };
-  ikasSummaryCache = { expiresAt: Date.now() + Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 120000)), value: summary };
+  ikasSummaryCache = { expiresAt: Date.now() + Math.max(0, Number(process.env.IKAS_SUMMARY_CACHE_MS || 300000)), value: summary };
   return summary;
 }
 
@@ -3737,12 +3797,19 @@ function adminHtml(serverAdmin) {
     ikasLoading=true;
     if(!isIkasActuallyConnected(ikasSummary)) connectIkasFast();
     setIkasStatusText('Bağlanıyor');
-    var url='/api/admin/ikas/summary'+(force?'?refresh=1':'');
+    var url='/api/admin/ikas/summary'+(force?'?refresh=1':'?fast=1');
     return api(url).then(function(d){
+      if(d && d.connecting && !ikasHasVisibleData(d)){
+        setIkasStatusText('Bağlanıyor');
+        renderIkas();
+        if(token)setTimeout(function(){loadIkasSummary(true,false)},1000);
+        return ikasSummary;
+      }
       ikasSummary=d||ikasSummary;
       ikasConnectedFast=isIkasActuallyConnected(ikasSummary);
       setIkasStatusText(ikasConnectedFast?'Bağlandı':ikasCurrentStatusText());
       renderIkas();
+      if(!ikasConnectedFast && token && !force)setTimeout(function(){loadIkasSummary(true,false)},1500);
       return ikasSummary;
     }).catch(function(err){
       ikasSummary.ikasError=err&&err.message?err.message:'ikas bağlantısı kurulamadı';
@@ -3750,7 +3817,7 @@ function adminHtml(serverAdmin) {
       setIkasStatusText('Bağlanamadı');
       if(!silent)toast('ikas bağlantısı yenilenemedi');
       renderIkas();
-      if(token)setTimeout(function(){loadIkasSummary(true,false)},5000);
+      if(token)setTimeout(function(){loadIkasSummary(true,false)},3000);
       return ikasSummary;
     }).finally(function(){ikasLoading=false; setIkasStatusText(ikasCurrentStatusText());});
   }
@@ -4530,14 +4597,14 @@ function start() {
       console.log(`RUTH manual live support listening on http://localhost:${PORT}`);
       console.log(`Storage: ${storage.kind}`);
       console.log(`Push ready: ${Boolean(webPush && VAPID_PUBLIC_KEY && VAPID_PRIVATE_KEY)}`);
-      setTimeout(() => warmIkasSummary("startup").catch(() => {}), 100);
+      setTimeout(() => warmIkasSummary("startup").catch(() => {}), 1);
     });
   }
 
   if (!ikasWarmTimer) {
     ikasWarmTimer = setInterval(() => {
       warmIkasSummary("interval").catch(() => {});
-    }, Math.max(60_000, Number(process.env.IKAS_AUTO_REFRESH_MS || 180000)));
+    }, Math.max(60_000, Number(process.env.IKAS_AUTO_REFRESH_MS || 60000)));
   }
 
   if (!reminderTimer) {
