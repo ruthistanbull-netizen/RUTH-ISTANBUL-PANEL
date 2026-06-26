@@ -655,7 +655,11 @@ async function handleAdminApi(req, res, url) {
       const result = await createIkasExchangeOrderForDelivered(body || {});
       return sendJson(res, { ok: true, created: true, exchangeOrder: result.order, paymentLink: result.paymentLink, diff: result.diff, tag: result.tag || null, input: result.input });
     } catch (error) {
-      return sendJson(res, { ok: false, created: false, error: "exchange_new_order_failed", message: error && error.message ? error.message : "Yeni değişim siparişi oluşturulamadı." }, 200);
+      let msg = error && error.message ? error.message : "Yeni değişim siparişi oluşturulamadı.";
+      if (/APP_IS_NOT_A_SALES_CHANNEL|not_a_sales_channel|salesChannelId_required/i.test(msg)) {
+        msg = "İkas yeni değişim siparişi için satış kanalı istiyor. Bu sürüm eski siparişin salesChannelId bilgisini gönderir; hâlâ hata olursa eski siparişten salesChannelId alınamıyor demektir.";
+      }
+      return sendJson(res, { ok: false, created: false, error: "exchange_new_order_failed", message: msg }, 200);
     }
   }
 
@@ -1377,13 +1381,21 @@ async function createIkasExchangeOrderForDelivered(inputData) {
     }
   `;
 
+  const salesChannelId = String(inputData.salesChannelId || "").trim();
+  if (!salesChannelId) {
+    throw new Error("salesChannelId_required_for_new_exchange_order");
+  }
+
   const order = {
     currencyCode: "TRY",
+    salesChannelId,
     note: noteLines.join("\\n"),
     customer,
     orderLineItems,
     orderedAt: new Date().toISOString()
   };
+  if (inputData.priceListId) order.priceListId = String(inputData.priceListId);
+  if (inputData.sourceId) order.sourceId = String(inputData.sourceId);
   if (exchangeTag && exchangeTag.id) order.orderTagIds = [exchangeTag.id];
 
   const variables = {
@@ -1536,6 +1548,9 @@ async function fetchIkasOrders() {
         totalPrice
         currencySymbol
         currencyCode
+        salesChannelId
+        sourceId
+        priceListId
         note
         orderTagIds
         customer { id fullName firstName lastName email phone isGuestCheckout }
@@ -1572,6 +1587,9 @@ async function fetchIkasOrders() {
         totalPrice
         currencySymbol
         currencyCode
+        salesChannelId
+        sourceId
+        priceListId
         note
         orderTagIds
         customer { id fullName firstName lastName email phone isGuestCheckout }
@@ -1607,6 +1625,9 @@ async function fetchIkasOrders() {
         totalPrice
         currencySymbol
         currencyCode
+        salesChannelId
+        sourceId
+        priceListId
         note
         orderTagIds
         customer { id fullName firstName lastName email phone }
@@ -1636,6 +1657,9 @@ async function fetchIkasOrders() {
         totalPrice
         currencySymbol
         currencyCode
+        salesChannelId
+        sourceId
+        priceListId
         note
         orderTagIds
       `
@@ -2310,6 +2334,9 @@ function normalizeIkasOrders(rawOrders) {
       orderSort: ikasDateSortValue(dateSource) || Number(order.orderSequence || order.orderNumber || 0),
       total: Number(order.totalFinalPrice ?? order.totalPrice ?? 0),
       currency: valueOrEmpty(order.currencySymbol) || valueOrEmpty(order.currencyCode) || "₺",
+      salesChannelId: valueOrEmpty(order.salesChannelId),
+      sourceId: valueOrEmpty(order.sourceId),
+      priceListId: valueOrEmpty(order.priceListId),
       note: valueOrEmpty(order.note),
       orderTagIds: Array.isArray(order.orderTagIds) ? order.orderTagIds.map(valueOrEmpty).filter(Boolean) : [],
       isExchangeOrder: /DEĞİŞİM SİPARİŞİ|Ruth panel değişim siparişi/i.test(valueOrEmpty(order.note)),
@@ -6232,7 +6259,7 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     }
     var reminder=card.querySelector('.exchange-reminder-at');
     var reason=card.querySelector('.exchange-reason');
-    return {card:card, order:o, customer:c, changes:changes, payload:{customerKey:c.key||'',customerName:c.name||o.customer||'',customerPhone:c.phone||o.phone||'',customerEmail:c.email||o.email||'',customerId:o.customerId||'',orderId:o.id,orderNumber:o.orderNumber||'',originalOrderNumber:o.number||o.orderNumber||'',orderDisplay:o.number||o.orderNumber||'',changes:changes,reason:reason&&reason.value||'',reminderAt:reminder&&reminder.value||''}};
+    return {card:card, order:o, customer:c, changes:changes, payload:{customerKey:c.key||'',customerName:c.name||o.customer||'',customerPhone:c.phone||o.phone||'',customerEmail:c.email||o.email||'',customerId:o.customerId||'',salesChannelId:o.salesChannelId||'',sourceId:o.sourceId||'',priceListId:o.priceListId||'',orderId:o.id,orderNumber:o.orderNumber||'',originalOrderNumber:o.number||o.orderNumber||'',orderDisplay:o.number||o.orderNumber||'',changes:changes,reason:reason&&reason.value||'',reminderAt:reminder&&reminder.value||''}};
   }
 
   function saveExchangeForOrder(orderId){
@@ -6282,6 +6309,9 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
       var msg=err&&err.message?err.message:String(err||'');
       if(/variant_not_changed|v varyant değişmedi|varyant değişmedi|variant_not_changed/i.test(msg)){
         msg='İkas siparişi kabul etti gibi göründü ama ürün varyantını gerçekten değiştirmedi. Sipariş durumu: '+(statusText||'bilinmiyor')+'. Teslim edilmiş/kilitli siparişlerde eski sipariş satırı değişmez; bu yüzden yeni değişim siparişi oluşturma yolu kullanılmalı.';
+      }
+      if(/satış kanalı|salesChannelId|APP_IS_NOT_A_SALES_CHANNEL/i.test(msg)){
+        msg+=' Siparişleri Yenile butonuna basıp tekrar dene. Devam ederse ikas sipariş verisinde salesChannelId alanını ayrıca debug ile çekeceğiz.';
       }
       alert('İkas’a işlenemedi: '+msg);
     }).finally(function(){
