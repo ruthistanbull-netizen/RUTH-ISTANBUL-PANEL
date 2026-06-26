@@ -667,7 +667,7 @@ async function handleAdminApi(req, res, url) {
       }
       return sendJson(res, { ok: true, synced: true, order: updateResult.order, paymentLink, input: updateResult.input });
     } catch (error) {
-      return sendJson(res, { ok: false, synced: false, error: "exchange_sync_failed", message: error && error.message ? error.message : "İkas değişim işlemi başarısız." }, 200);
+      return sendJson(res, { ok: false, synced: false, error: error && error.code ? error.code : "exchange_sync_failed", message: error && error.message ? error.message : "İkas değişim işlemi başarısız.", details: error && error.details ? error.details : null }, 200);
     }
   }
 
@@ -1258,18 +1258,21 @@ function buildIkasOrderLineUpdateItems(changes) {
   return (Array.isArray(changes) ? changes : []).map((change) => {
     const orderLineItemId = String(change.baseLineId || change.lineId || "").split("::")[0];
     const variantId = String(change.toVariantId || "").trim();
+    const productId = String(change.toProductId || "").trim();
     const price = Number(change.toPrice || 0);
     const quantity = Math.max(1, Number(change.quantity || 1));
     if (!orderLineItemId || !variantId || !(price >= 0)) return null;
-    return {
+    const item = {
       id: orderLineItemId,
       price,
       quantity,
       variant: {
         id: variantId,
-        name: String(change.toVariantText || change.toProductName || "Değişim Ürünü").slice(0, 240)
+        name: String(change.toProductName || change.toVariantText || "Değişim Ürünü").slice(0, 240)
       }
     };
+    if (productId) item.sourceId = productId;
+    return item;
   }).filter(Boolean);
 }
 
@@ -1310,7 +1313,14 @@ async function updateIkasOrderLinesForExchange(orderId, changes, editReason = ""
     return String(line.variant && line.variant.id || "") !== String(sent.variant && sent.variant.id || "");
   });
   if (failed.length) {
-    throw new Error("ikas_update_returned_but_variant_not_changed");
+    const first = failed[0] || {};
+    const returned = returnedLines.find((item) => String(item && item.id) === String(first.id)) || {};
+    const wanted = String(first.variant && first.variant.id || "");
+    const got = String(returned.variant && returned.variant.id || "");
+    const err = new Error(`ikas siparişi döndürdü ama varyant değişmedi. İstenen: ${wanted || "-"} / Dönen: ${got || "-"}. Teslim edilmiş veya kilitli siparişlerde ikas satırı değiştirmiyor olabilir.`);
+    err.code = "variant_not_changed";
+    err.details = { wanted, got, returnedLine: returned, sentLine: first };
+    throw err;
   }
   return { order, input };
 }
@@ -5392,6 +5402,17 @@ function adminHtml(serverAdmin) {
   }
 }
 
+
+
+/* V105: ikas sync details */
+.exchange-sync-hint{
+  grid-column:1/-1;
+  font-size:11px;
+  line-height:1.35;
+  color:var(--muted);
+  margin-top:6px;
+}
+
 </style>
 </head>
 <body>
@@ -6017,7 +6038,7 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     });
     lines=lines.join('');
     var reasonOptions=['Kararma','Yeşil iz bırakma','Zincir Kopması'].map(function(r){return '<option value="'+escapeHtml(r)+'" '+(rec&&rec.reason===r?'selected':'')+'>'+escapeHtml(r)+'</option>'}).join('');
-    return '<div class="exchange-order-card" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+' — '+escapeHtml(o.customer||'')+(rec?'<span class="exchange-chip">Değişim yapıldı</span>':'')+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.packageStatus||o.status||'')+'</div></div><span class="badge '+(rec?'exchange-done':'')+'">'+(rec?'Değişim yapıldı':escapeHtml(o.packageStatus||o.status||'Yeni'))+'</span></div>'+lines+'<div class="exchange-form-row"><div class="field"><label>Değişim nedeni</label><select class="input exchange-reason"><option value="">Sebep seç</option>'+reasonOptions+'</select></div><div class="field"><label>Değişim hatırlatma zamanı</label><input class="input exchange-reminder-at" type="datetime-local" value="'+escapeHtml(rec&&rec.reminderAt?String(rec.reminderAt).slice(0,16):'')+'"></div><button class="btn gold exchange-save" data-order-id="'+escapeHtml(o.id)+'">Değişimi Kaydet</button><button class="btn ghost exchange-sync" data-order-id="'+escapeHtml(o.id)+'">İkas’a İşle</button></div></div>';
+    return '<div class="exchange-order-card" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+' — '+escapeHtml(o.customer||'')+(rec?'<span class="exchange-chip">Değişim yapıldı</span>':'')+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.packageStatus||o.status||'')+'</div></div><span class="badge '+(rec?'exchange-done':'')+'">'+(rec?'Değişim yapıldı':escapeHtml(o.packageStatus||o.status||'Yeni'))+'</span></div>'+lines+'<div class="exchange-form-row"><div class="field"><label>Değişim nedeni</label><select class="input exchange-reason"><option value="">Sebep seç</option>'+reasonOptions+'</select></div><div class="field"><label>Değişim hatırlatma zamanı</label><input class="input exchange-reminder-at" type="datetime-local" value="'+escapeHtml(rec&&rec.reminderAt?String(rec.reminderAt).slice(0,16):'')+'"></div><button class="btn gold exchange-save" data-order-id="'+escapeHtml(o.id)+'">Değişimi Kaydet</button><button class="btn ghost exchange-sync" data-order-id="'+escapeHtml(o.id)+'">İkas’a İşle</button></div><div class="exchange-sync-hint">Not: Teslim edilmiş/kilitli siparişlerde ikas ürün satırını değiştirmeyebilir.</div></div>';
   }
   function collectExchangePayload(orderId){
     var orders=ikasSummary.orders||[];
@@ -6089,7 +6110,12 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
       toast(d.paymentLink?'İkas’a işlendi, ödeme linki oluşturuldu':'İkas’a işlendi');
       return loadIkasSummary(false,true).then(function(){return loadExchangeRecords()});
     }).catch(function(err){
-      alert('İkas’a işlenemedi: '+(err&&err.message?err.message:err));
+      var msg=err&&err.message?err.message:String(err||'');
+      var statusText=[pack.order.packageStatus,pack.order.status,pack.order.paymentStatus].filter(Boolean).join(' / ');
+      if(/variant_not_changed|v varyant değişmedi|varyant değişmedi|variant_not_changed/i.test(msg)){
+        msg='İkas siparişi kabul etti gibi göründü ama ürün varyantını gerçekten değiştirmedi. Sipariş durumu: '+(statusText||'bilinmiyor')+'. Teslim edilmiş/kilitli siparişlerde ikas satır değiştirmiyor olabilir. Bu durumda panel kaydı tutulur ama ikas siparişi manuel kontrol edilmeli.';
+      }
+      alert('İkas’a işlenemedi: '+msg);
     }).finally(function(){
       if(btn){btn.disabled=false;btn.textContent=oldText;}
     });
