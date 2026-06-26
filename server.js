@@ -651,13 +651,16 @@ async function handleAdminApi(req, res, url) {
 
   if (req.method === "GET" && pathname === "/api/admin/ikas/sales-channel-debug") {
     try {
-      const rows = await fetchIkasSalesChannels();
+      const detailed = await fetchIkasSalesChannelsDetailed();
+      const rows = detailed.rows || [];
       const targetName = String(process.env.IKAS_SALES_CHANNEL_NAME || process.env.RUTH_IKAS_SALES_CHANNEL_NAME || "ruthistanbul.com");
-      const resolved = await resolveIkasSalesChannelId("");
+      let resolved = "";
+      let resolveError = "";
+      try { resolved = await resolveIkasSalesChannelId(""); } catch (resolveErr) { resolveError = resolveErr && resolveErr.message ? resolveErr.message : String(resolveErr); }
       const selected = rows.find((row) => String(row.id) === String(resolved)) || null;
-      return sendJson(res, { ok: true, targetName, resolvedSalesChannelId: resolved, selectedSalesChannel: selected, salesChannels: rows });
+      return sendJson(res, { ok: true, targetName, resolvedSalesChannelId: resolved, selectedSalesChannel: selected, salesChannels: rows, resolveError, attempts: detailed.attempts || [] });
     } catch (error) {
-      return sendJson(res, { ok: false, error: "sales_channel_debug_failed", message: error && error.message ? error.message : "sales_channel_debug_failed" }, 500);
+      return sendJson(res, { ok: true, targetName: "ruthistanbul.com", resolvedSalesChannelId: "", selectedSalesChannel: null, salesChannels: [], resolveError: error && error.message ? error.message : "sales_channel_debug_failed", attempts: [] });
     }
   }
 
@@ -669,7 +672,7 @@ async function handleAdminApi(req, res, url) {
     } catch (error) {
       let msg = error && error.message ? error.message : "Yeni değişim siparişi oluşturulamadı.";
       if (/APP_IS_NOT_A_SALES_CHANNEL|not_a_sales_channel|salesChannelId_required/i.test(msg)) {
-        msg = "İkas yeni değişim siparişi için satış kanalı istiyor. Bu sürüm listSalesChannel içinde özellikle ruthistanbul.com satış kanalını bulup onu kullanır. Hata devam ederse ikas özel uygulama yetkisinde satış kanalı erişimi kapalı olabilir.";
+        msg = "İkas yeni değişim siparişi için satış kanalı istiyor. Bu sürüm ruthistanbul.com satış kanalını bulup kullanır. Bulamazsa Satış Kanalını Kontrol Et çıktısını gönder veya Render env içine IKAS_SALES_CHANNEL_ID ekle.";
       }
       return sendJson(res, { ok: false, created: false, error: "exchange_new_order_failed", message: msg }, 200);
     }
@@ -1342,42 +1345,53 @@ function normalizeIkasSalesChannelRows(input) {
         : [];
   return rows.map((row) => ({
     id: valueOrEmpty(row && row.id),
-    name: valueOrEmpty(row && row.name) || valueOrEmpty(row && row.title) || "Satış Kanalı",
+    name: valueOrEmpty(row && row.name) || valueOrEmpty(row && row.title) || valueOrEmpty(row && row.domain) || "Satış Kanalı",
+    title: valueOrEmpty(row && row.title),
+    domain: valueOrEmpty(row && row.domain),
     type: valueOrEmpty(row && row.type),
     isActive: typeof (row && row.isActive) === "boolean" ? row.isActive : true
   })).filter((row) => row.id);
 }
 
-let ikasSalesChannelCache = { at: 0, rows: [] };
+let ikasSalesChannelCache = { at: 0, rows: [], attempts: [] };
+
+async function fetchIkasSalesChannelsDetailed() {
+  const attempts = [
+    { label: "listSalesChannel id-name", query: `query RuthListSalesChannels { listSalesChannel { id name } }` },
+    { label: "listSalesChannel id-name-domain", query: `query RuthListSalesChannelsDomain { listSalesChannel { id name domain } }` },
+    { label: "listSalesChannel id-title", query: `query RuthListSalesChannelsTitle { listSalesChannel { id title } }` },
+    { label: "listSalesChannel id-only", query: `query RuthListSalesChannelsIdOnly { listSalesChannel { id } }` },
+    { label: "listSalesChannel paged id-name", query: `query RuthListSalesChannelsPaged { listSalesChannel(pagination:{limit:50,page:1}) { data { id name } } }` },
+    { label: "getAuthorizedApp", query: `query RuthAuthorizedApp { getAuthorizedApp { id name } }` },
+    { label: "introspection sales channel", query: `query RuthSalesChannelIntrospection { salesChannelType: __type(name:"SalesChannel") { name fields { name type { kind name ofType { kind name } } } } queryType: __schema { queryType { fields { name args { name type { kind name ofType { kind name } } } } } } }` }
+  ];
+
+  const results = [];
+  let foundRows = [];
+
+  for (const attempt of attempts) {
+    try {
+      const data = await ikasGraphQL(attempt.query, {}, attempt.label);
+      const node = data && data.listSalesChannel ? data.listSalesChannel : null;
+      const rows = normalizeIkasSalesChannelRows(node);
+      if (rows.length && !foundRows.length) foundRows = rows;
+      results.push({ ok: true, label: attempt.label, rows, data });
+    } catch (error) {
+      results.push({ ok: false, label: attempt.label, error: error && error.message ? error.message : String(error) });
+    }
+  }
+
+  return { rows: foundRows, attempts: results };
+}
 
 async function fetchIkasSalesChannels() {
   const now = Date.now();
   if (ikasSalesChannelCache.rows.length && now - ikasSalesChannelCache.at < 10 * 60 * 1000) {
     return ikasSalesChannelCache.rows;
   }
-
-  const attempts = [
-    { label: "ikas sales channels full", query: `query RuthListSalesChannels { listSalesChannel { id name type isActive } }` },
-    { label: "ikas sales channels safe", query: `query RuthListSalesChannelsSafe { listSalesChannel { id name } }` },
-    { label: "ikas sales channels paged", query: `query RuthListSalesChannelsPaged { listSalesChannel(pagination:{limit:50,page:1}) { data { id name type isActive } } }` }
-  ];
-
-  const errors = [];
-  for (const attempt of attempts) {
-    try {
-      const data = await ikasGraphQL(attempt.query, {}, attempt.label);
-      const rows = normalizeIkasSalesChannelRows(data && data.listSalesChannel);
-      if (rows.length) {
-        ikasSalesChannelCache = { at: now, rows };
-        return rows;
-      }
-    } catch (error) {
-      errors.push(error && error.message ? error.message : String(error));
-    }
-  }
-
-  console.error("ikas sales channels error:", errors.join(" || ").slice(0, 900));
-  return [];
+  const detailed = await fetchIkasSalesChannelsDetailed();
+  ikasSalesChannelCache = { at: now, rows: detailed.rows || [], attempts: detailed.attempts || [] };
+  return ikasSalesChannelCache.rows;
 }
 
 async function resolveIkasSalesChannelId(preferred) {
@@ -1387,19 +1401,21 @@ async function resolveIkasSalesChannelId(preferred) {
   const wantedName = String(process.env.IKAS_SALES_CHANNEL_NAME || process.env.RUTH_IKAS_SALES_CHANNEL_NAME || "ruthistanbul.com").trim().toLowerCase();
   const rows = await fetchIkasSalesChannels();
 
-  const exact = rows.find((row) => String(row.name || "").trim().toLowerCase() === wantedName);
+  const matchText = (row) => [row.name, row.title, row.domain].filter(Boolean).join(" ").toLowerCase();
+
+  const exact = rows.find((row) => String(row.name || "").trim().toLowerCase() === wantedName || String(row.domain || "").trim().toLowerCase() === wantedName);
   if (exact && exact.id) return String(exact.id);
 
-  const contains = rows.find((row) => String(row.name || "").trim().toLowerCase().indexOf(wantedName) >= 0);
+  const contains = rows.find((row) => matchText(row).indexOf(wantedName) >= 0);
   if (contains && contains.id) return String(contains.id);
 
-  const domainName = rows.find((row) => /ruthistanbul\.com/i.test(String(row.name || "")));
+  const domainName = rows.find((row) => /ruthistanbul\.com/i.test(matchText(row)));
   if (domainName && domainName.id) return String(domainName.id);
 
   const oldOrderChannel = String(preferred || "").trim();
   if (oldOrderChannel) return oldOrderChannel;
 
-  throw new Error(`ruthistanbul.com satış kanalı bulunamadı. İkas Entegrasyonu > Satış Kanalını Kontrol Et çıktısını gönder.`);
+  throw new Error("ruthistanbul.com satış kanalı bulunamadı. İkas Entegrasyonu > Satış Kanalını Kontrol Et çıktısını gönder veya Render env içine IKAS_SALES_CHANNEL_ID ekle.");
 }
 
 async function ensureIkasOrderTagByName(tagName) {
@@ -6403,7 +6419,7 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
         msg='İkas siparişi kabul etti gibi göründü ama ürün varyantını gerçekten değiştirmedi. Sipariş durumu: '+(statusText||'bilinmiyor')+'. Teslim edilmiş/kilitli siparişlerde eski sipariş satırı değişmez; bu yüzden yeni değişim siparişi oluşturma yolu kullanılmalı.';
       }
       if(/satış kanalı|salesChannelId|APP_IS_NOT_A_SALES_CHANNEL/i.test(msg)){
-        msg+=' İkas Entegrasyonu sayfasındaki Satış Kanalını Kontrol Et butonuna basıp çıktıyı gönder.';
+        msg+=' İkas Entegrasyonu sayfasındaki Satış Kanalını Kontrol Et butonuna basıp çıkan JSON’u gönder.';
       }
       alert('İkas’a işlenemedi: '+msg);
     }).finally(function(){
