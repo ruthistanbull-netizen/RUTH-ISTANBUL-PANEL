@@ -1637,22 +1637,51 @@ async function tagIkasOrderAsExchange(orderId) {
 }
 
 
-function buildIkasSameOrderAddLineItems(changes) {
+function buildIkasSameOrderAddLineItems(changes, mode = "full") {
   return (Array.isArray(changes) ? changes : []).map((change) => {
     const variantId = String(change.toVariantId || "").trim();
     const productId = String(change.toProductId || "").trim();
     const price = Number(Math.max(0, Number(change.toPrice || 0)).toFixed(2));
-    if (!variantId || !productId) return null;
-    return {
-      sourceId: productId,
+    if (!variantId) return null;
+    if (!productId && mode !== "noSource" && mode !== "variantOnlyNoSource") return null;
+    const item = {
       price,
       quantity: Math.max(1, Number(change.quantity || 1)),
+      variant: { id: variantId }
+    };
+    if (mode !== "noSource" && mode !== "variantOnlyNoSource" && productId) item.sourceId = productId;
+    if (mode !== "variantOnly" && mode !== "variantOnlyNoSource") {
+      item.variant.name = String(change.toProductName || change.toVariantText || "Değişim Ürünü").slice(0, 240);
+    }
+    return item;
+  }).filter(Boolean);
+}
+
+function buildIkasExistingOrderLineItemsForUpdate(order) {
+  const items = Array.isArray(order && order.items) ? order.items : [];
+  return items.map((item) => {
+    const lineId = String(item && item.id || "").split("::")[0];
+    const variantId = String(item && item.variantId || "").trim();
+    const quantity = Math.max(1, Number(item && item.quantity || 1));
+    const price = Number(Math.max(0, Number(item && (item.unitPrice || (Number(item.totalPrice || 0) / quantity)) || 0)).toFixed(2));
+    if (!lineId || !variantId) return null;
+    const row = {
+      id: lineId,
+      price,
+      quantity,
       variant: {
         id: variantId,
-        name: String(change.toProductName || change.toVariantText || "Değişim Ürünü").slice(0, 240)
+        name: String(item.baseName || item.name || "Ürün").slice(0, 240)
       }
     };
+    if (item.productId) row.sourceId = String(item.productId);
+    return row;
   }).filter(Boolean);
+}
+
+function summarizeIkasAttemptError(error) {
+  const message = error && error.message ? error.message : String(error || "");
+  return message.replace(/\s+/g, " ").slice(0, 700);
 }
 
 function buildIkasFullRefundLines(changes) {
@@ -1680,12 +1709,7 @@ async function findIkasOrderForLifecycle(orderId) {
   }
 }
 
-async function addIkasExchangeLinesToSameOrder(orderId, changes, editReason) {
-  const id = String(orderId || "").trim();
-  if (!id) throw new Error("orderId_required");
-  const orderLineItems = buildIkasSameOrderAddLineItems(changes);
-  if (!orderLineItems.length) throw new Error("exchange_add_lines_required");
-
+async function tryIkasSameOrderAddAttempt(orderId, orderLineItems, editReason, label) {
   const query = `
     mutation RuthAddExchangeLineToSameOrder($input: UpdateOrderInput!) {
       updateOrderLine(input: $input) {
@@ -1706,22 +1730,77 @@ async function addIkasExchangeLinesToSameOrder(orderId, changes, editReason) {
     }
   `;
   const input = {
-    orderId: id,
+    orderId,
     editReason: String(editReason || "Ruth panel değişim: yeni ürün eklendi").slice(0, 500),
     restockItems: false,
     orderLineItems
   };
-  const data = await ikasGraphQL(query, { input }, "ikas same order add exchange lines");
-  const order = data && data.updateOrderLine ? data.updateOrderLine : null;
-  const returnedLines = Array.isArray(order && order.orderLineItems) ? order.orderLineItems : [];
-  const missing = orderLineItems.filter((sent) => !returnedLines.some((line) => String(line && line.variant && line.variant.id || "") === String(sent.variant && sent.variant.id || "")));
-  if (missing.length) {
-    const err = new Error("ikas yeni değişim ürününü aynı siparişe eklemiş görünmüyor. updateOrderLine döndü ama yeni varyant satırı bulunamadı.");
-    err.code = "exchange_add_line_not_verified";
-    err.details = { sent: orderLineItems, returnedLines };
-    throw err;
+  const data = await ikasGraphQL(query, { input }, label);
+  return { order: data && data.updateOrderLine ? data.updateOrderLine : null, input, label };
+}
+
+async function addIkasExchangeLinesToSameOrder(orderId, changes, editReason) {
+  const id = String(orderId || "").trim();
+  if (!id) throw new Error("orderId_required");
+
+  const errors = [];
+  const modes = ["full", "variantOnly", "noSource", "variantOnlyNoSource"];
+
+  for (const mode of modes) {
+    const orderLineItems = buildIkasSameOrderAddLineItems(changes, mode);
+    if (!orderLineItems.length) continue;
+    const label = `ikas same order add exchange lines add-only ${mode}`;
+    try {
+      const result = await tryIkasSameOrderAddAttempt(id, orderLineItems, editReason, label);
+      const returnedLines = Array.isArray(result.order && result.order.orderLineItems) ? result.order.orderLineItems : [];
+      const missing = orderLineItems.filter((sent) => !returnedLines.some((line) => String(line && line.variant && line.variant.id || "") === String(sent.variant && sent.variant.id || "")));
+      if (missing.length) {
+        const err = new Error("ikas yeni değişim ürününü aynı siparişe eklemiş görünmüyor. updateOrderLine döndü ama yeni varyant satırı bulunamadı.");
+        err.code = "exchange_add_line_not_verified";
+        err.details = { attempt: label, sent: orderLineItems, returnedLines };
+        throw err;
+      }
+      result.attempts = [{ label, ok: true }];
+      return result;
+    } catch (error) {
+      errors.push({ label, ok: false, message: summarizeIkasAttemptError(error) });
+    }
   }
-  return { order, input };
+
+  let contextOrder = null;
+  try { contextOrder = await findIkasOrderForLifecycle(id); } catch (_) { contextOrder = null; }
+  const existingLines = buildIkasExistingOrderLineItemsForUpdate(contextOrder);
+
+  if (existingLines.length) {
+    for (const mode of modes) {
+      const newLines = buildIkasSameOrderAddLineItems(changes, mode);
+      if (!newLines.length) continue;
+      const orderLineItems = existingLines.concat(newLines);
+      const label = `ikas same order add exchange lines existing-plus-new ${mode}`;
+      try {
+        const result = await tryIkasSameOrderAddAttempt(id, orderLineItems, editReason, label);
+        const returnedLines = Array.isArray(result.order && result.order.orderLineItems) ? result.order.orderLineItems : [];
+        const missing = newLines.filter((sent) => !returnedLines.some((line) => String(line && line.variant && line.variant.id || "") === String(sent.variant && sent.variant.id || "")));
+        if (missing.length) {
+          const err = new Error("ikas mevcut satırlarla denendi ama yeni varyant siparişte görünmedi.");
+          err.code = "exchange_add_line_not_verified";
+          err.details = { attempt: label, sent: newLines, returnedLines };
+          throw err;
+        }
+        result.attempts = errors.concat([{ label, ok: true }]);
+        return result;
+      } catch (error) {
+        errors.push({ label, ok: false, message: summarizeIkasAttemptError(error) });
+      }
+    }
+  } else {
+    errors.push({ label: "existing-plus-new skipped", ok: false, message: "Mevcut sipariş satırları okunamadığı için complete orderLineItems denemesi yapılmadı." });
+  }
+
+  const err = new Error("İkas aynı siparişe yeni değişim ürünü eklemeyi reddetti. Tüm updateOrderLine denemeleri başarısız oldu: " + errors.map((x) => `${x.label}: ${x.message}`).join(" | ").slice(0, 1400));
+  err.code = "same_order_add_all_attempts_failed";
+  err.details = { attempts: errors, existingLinesCount: existingLines.length };
+  throw err;
 }
 
 async function refundIkasOldLinesFullForExchange(orderId, changes, stockLocationId, reason) {
@@ -1813,15 +1892,16 @@ async function processIkasSameOrderExchangeLifecycle(inputData) {
     lifecycle: true,
     noNewOrder: true,
     addInput: addResult.input,
+    addAttempts: addResult.attempts || [],
     refundInput: refundResult.input,
     input: {
       reason: inputData.reason || "",
       originalOrderNumber: inputData.originalOrderNumber || "",
       note: diff > 0
-        ? `Yeni ürün aynı siparişe tam fiyatıyla eklendi. Eski ürün tam tutarlı iade satırıyla düşüldü. Para iadesi transaction gönderilmedi. Ek ödeme: ${payableDiff.toFixed(2)}`
+        ? `Yeni ürün aynı siparişe tam fiyatıyla eklendi. İkas hata verirse farklı payload şekilleri otomatik denenir. Eski ürün tam tutarlı iade satırıyla düşüldü. Ek ödeme: ${payableDiff.toFixed(2)}`
         : diff < 0
-          ? `Yeni ürün aynı siparişe tam fiyatıyla eklendi. Eski ürün tam tutarlı iade satırıyla düşüldü. Para iadesi transaction gönderilmedi. İade farkı: ${refundOrCredit.toFixed(2)}`
-          : "Yeni ürün aynı siparişe tam fiyatıyla eklendi. Eski ürün tam tutarlı iade satırıyla düşüldü. Para iadesi transaction gönderilmedi. Fiyat farkı yok."
+          ? `Yeni ürün aynı siparişe tam fiyatıyla eklendi. İkas hata verirse farklı payload şekilleri otomatik denenir. Eski ürün tam tutarlı iade satırıyla düşüldü. İade farkı: ${refundOrCredit.toFixed(2)}`
+          : "Yeni ürün aynı siparişe tam fiyatıyla eklendi. İkas hata verirse farklı payload şekilleri otomatik denenir. Eski ürün tam tutarlı iade satırıyla düşüldü. Fiyat farkı yok."
     }
   };
 }
@@ -6104,7 +6184,7 @@ function adminHtml(serverAdmin) {
 }
 
 
-/* V124: full new line + full old refund line, no forced refund transaction */
+/* V126: same order add fallback attempts */
 .exchange-sync-hint{
   color:#d8b66f !important;
 }
