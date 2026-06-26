@@ -653,7 +653,7 @@ async function handleAdminApi(req, res, url) {
     try {
       const detailed = await fetchIkasSalesChannelsDetailed();
       const rows = detailed.rows || [];
-      const targetName = String(process.env.IKAS_SALES_CHANNEL_NAME || process.env.RUTH_IKAS_SALES_CHANNEL_NAME || "ruthistanbul.com");
+      const targetName = String(process.env.IKAS_SALES_CHANNEL_NAME || process.env.RUTH_IKAS_SALES_CHANNEL_NAME || "ruthistanbul.com / ruthistanbul");
       let resolved = "";
       let resolveError = "";
       try { resolved = await resolveIkasSalesChannelId(""); } catch (resolveErr) { resolveError = resolveErr && resolveErr.message ? resolveErr.message : String(resolveErr); }
@@ -672,7 +672,7 @@ async function handleAdminApi(req, res, url) {
     } catch (error) {
       let msg = error && error.message ? error.message : "Yeni değişim siparişi oluşturulamadı.";
       if (/APP_IS_NOT_A_SALES_CHANNEL|not_a_sales_channel|salesChannelId_required/i.test(msg)) {
-        msg = "İkas yeni değişim siparişi için satış kanalı istiyor. Bu sürüm ruthistanbul.com satış kanalını bulup kullanır. Bulamazsa Satış Kanalını Kontrol Et çıktısını gönder veya Render env içine IKAS_SALES_CHANNEL_ID ekle.";
+        msg = "İkas yeni değişim siparişi için satış kanalı istiyor. Bu sürüm ruthistanbul satış kanalını bulup kullanır. Bulamazsa Satış Kanalını Kontrol Et çıktısını gönder veya Render env içine IKAS_SALES_CHANNEL_ID ekle.";
       }
       return sendJson(res, { ok: false, created: false, error: "exchange_new_order_failed", message: msg }, 200);
     }
@@ -1398,24 +1398,37 @@ async function resolveIkasSalesChannelId(preferred) {
   const forcedId = String(process.env.IKAS_SALES_CHANNEL_ID || process.env.RUTH_IKAS_SALES_CHANNEL_ID || "").trim();
   if (forcedId) return forcedId;
 
-  const wantedName = String(process.env.IKAS_SALES_CHANNEL_NAME || process.env.RUTH_IKAS_SALES_CHANNEL_NAME || "ruthistanbul.com").trim().toLowerCase();
+  const envName = String(process.env.IKAS_SALES_CHANNEL_NAME || process.env.RUTH_IKAS_SALES_CHANNEL_NAME || "").trim();
+  const wantedNames = envName
+    ? [envName]
+    : ["ruthistanbul.com", "ruthistanbul", "ruth istanbul", "ruthıstanbul", "ruth İstanbul"];
+  const normalizeName = (value) => String(value || "")
+    .toLowerCase()
+    .replace(/ı/g, "i")
+    .replace(/İ/g, "i")
+    .replace(/[^a-z0-9]+/g, "");
+
+  const wantedKeys = wantedNames.map(normalizeName).filter(Boolean);
   const rows = await fetchIkasSalesChannels();
+  const rowText = (row) => [row.name, row.title, row.domain].filter(Boolean).join(" ");
+  const rowKey = (row) => normalizeName(rowText(row));
 
-  const matchText = (row) => [row.name, row.title, row.domain].filter(Boolean).join(" ").toLowerCase();
-
-  const exact = rows.find((row) => String(row.name || "").trim().toLowerCase() === wantedName || String(row.domain || "").trim().toLowerCase() === wantedName);
+  const exact = rows.find((row) => {
+    const key = rowKey(row);
+    return wantedKeys.some((wanted) => key === wanted);
+  });
   if (exact && exact.id) return String(exact.id);
 
-  const contains = rows.find((row) => matchText(row).indexOf(wantedName) >= 0);
+  const contains = rows.find((row) => {
+    const key = rowKey(row);
+    return wantedKeys.some((wanted) => key.indexOf(wanted) >= 0 || wanted.indexOf(key) >= 0);
+  });
   if (contains && contains.id) return String(contains.id);
-
-  const domainName = rows.find((row) => /ruthistanbul\.com/i.test(matchText(row)));
-  if (domainName && domainName.id) return String(domainName.id);
 
   const oldOrderChannel = String(preferred || "").trim();
   if (oldOrderChannel) return oldOrderChannel;
 
-  throw new Error("ruthistanbul.com satış kanalı bulunamadı. İkas Entegrasyonu > Satış Kanalını Kontrol Et çıktısını gönder veya Render env içine IKAS_SALES_CHANNEL_ID ekle.");
+  throw new Error("ruthistanbul satış kanalı bulunamadı. İkas Entegrasyonu > Satış Kanalını Kontrol Et çıktısını gönder veya Render env içine IKAS_SALES_CHANNEL_ID=614dc231-5aa8-4d60-88ed-e4a1c74a5782 ekle.");
 }
 
 async function ensureIkasOrderTagByName(tagName) {
