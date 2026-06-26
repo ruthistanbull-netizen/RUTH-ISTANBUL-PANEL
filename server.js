@@ -669,7 +669,7 @@ async function handleAdminApi(req, res, url) {
     try {
       body = await readJson(req, 2_000_000);
       const result = await createIkasExchangeOrderForDelivered(body || {});
-      return sendJson(res, { ok: true, created: true, exchangeOrder: result.order, paymentLink: result.paymentLink, diff: result.diff, payableDiff: result.payableDiff || 0, refundOrCredit: result.refundOrCredit || 0, negativeAccepted: !!result.negativeAccepted, negativeError: result.negativeError || "", amountMode: result.amountMode || "", tag: result.tag || null, input: result.input });
+      return sendJson(res, { ok: true, created: false, tagged: true, noNewOrder: true, exchangeOrder: result.order, paymentLink: "", diff: result.diff, payableDiff: result.payableDiff || 0, refundOrCredit: result.refundOrCredit || 0, negativeAccepted: false, negativeError: "", amountMode: result.amountMode || "tag-only-no-new-order", tag: result.tag || null, input: result.input });
     } catch (error) {
       let msg = error && error.message ? error.message : "Yeni değişim siparişi oluşturulamadı.";
       if (/APP_IS_NOT_A_SALES_CHANNEL|not_a_sales_channel/i.test(msg)) {
@@ -728,7 +728,7 @@ async function handleAdminApi(req, res, url) {
       }
       return sendJson(res, { ok: true, paymentLink });
     } catch (error) {
-      return sendJson(res, { ok: false, error: "payment_link_failed", message: error && error.message ? error.message : "Ödeme linki oluşturulamadı." }, 200);
+      return sendJson(res, { ok: false, error: "payment_link_failed", message: error && error.message ? error.message : "Link yok / mesaj hazırlaulamadı." }, 200);
     }
   }
 
@@ -1521,110 +1521,29 @@ async function createIkasExchangeOrderForDelivered(inputData) {
   const payableDiff = Math.max(0, diff);
   const refundOrCredit = Math.max(0, -diff);
 
-  const customerName = splitCustomerName(inputData.customerName || "");
-  const customer = {};
-  if (inputData.customerId) customer.id = String(inputData.customerId);
-  if (inputData.customerEmail) customer.email = String(inputData.customerEmail);
-  customer.firstName = String(customerName.firstName || "Müşteri");
-  customer.lastName = String(customerName.lastName || "");
-
-  const exchangeTag = await ensureIkasOrderTagByName("DEĞİŞİM");
-  const salesChannelId = await resolveIkasSalesChannelId(inputData.salesChannelId || "");
-  if (!salesChannelId) {
-    throw new Error("salesChannelId_required_for_new_exchange_order");
-  }
-
-  async function createWithMode(amountMode) {
-    const orderLineItems = buildIkasExchangeOrderLines(changes, amountMode);
-    if (!orderLineItems.length) throw new Error("orderLineItems_required");
-
-    const modeText = amountMode === "negative-diff"
-      ? "Eksi fiyat farkı test edildi ve ikas kabul etti."
-      : amountMode === "zero"
-        ? "İkas eksi tutarı kabul etmediği için sipariş tutarı 0 TL olarak açıldı."
-        : "İkas değişim siparişi tutarı sadece fiyat farkıdır.";
-
-    const reasonText = String(inputData.reason || "").trim();
-    const noteLines = [
-      "DEĞİŞİM SİPARİŞİ - NORMAL SATIŞ DEĞİL",
-      "Ruth panel tarafından oluşturuldu.",
-      inputData.originalOrderNumber ? `Eski sipariş: ${inputData.originalOrderNumber}` : "",
-      reasonText ? `Değişim nedeni: ${reasonText}` : "",
-      diff > 0 ? `Ek ödeme bekleniyor: ${payableDiff.toFixed(2)}` : (diff < 0 ? `Eksi/iade farkı: -${refundOrCredit.toFixed(2)}` : "Fiyat farkı yok"),
-      modeText,
-      "Eski ürün ödemesi bu siparişe yeniden gelir olarak yazılmaz."
-    ].filter(Boolean);
-
-    const query = `
-      mutation RuthCreateExchangeOrder($input: CreateOrderWithTransactionsInput!) {
-        createOrderWithTransactions(input: $input) {
-          id
-          orderNumber
-          orderPaymentStatus
-          totalFinalPrice
-        }
-      }
-    `;
-
-    const order = {
-      currencyCode: "TRY",
-      salesChannelId,
-      note: noteLines.join("\\n"),
-      customer,
-      orderLineItems,
-      orderedAt: new Date().toISOString()
-    };
-    if (inputData.priceListId) order.priceListId = String(inputData.priceListId);
-    if (inputData.sourceId) order.sourceId = String(inputData.sourceId);
-    if (exchangeTag && exchangeTag.id) order.orderTagIds = [exchangeTag.id];
-
-    const variables = {
-      input: {
-        disableAutoCreateCustomer: false,
-        isTaxFreeOrder: false,
-        order,
-        transactions: []
-      }
-    };
-
-    const data = await ikasGraphQL(query, variables, `ikas create delivered exchange order ${amountMode}`);
-    const createdOrder = data && data.createOrderWithTransactions ? data.createOrderWithTransactions : null;
-    if (!createdOrder || !createdOrder.id) throw new Error("exchange_order_not_created");
-    return { createdOrder, input: variables.input, amountMode };
-  }
-
-  let created = null;
-  let negativeAccepted = false;
-  let negativeError = "";
-
-  if (diff < 0) {
-    try {
-      created = await createWithMode("negative-diff");
-      negativeAccepted = true;
-    } catch (error) {
-      negativeError = error && error.message ? error.message : String(error);
-      created = await createWithMode("zero");
-    }
-  } else {
-    created = await createWithMode("positive-diff");
-  }
-
-  let paymentLink = "";
-  if (payableDiff > 0) {
-    try { paymentLink = await generateIkasOrderPaymentLink(created.createdOrder.id); } catch (_) { paymentLink = ""; }
-  }
+  const fallback = await tagIkasOrderAsExchange(inputData && inputData.orderId);
 
   return {
-    order: created.createdOrder,
-    paymentLink,
+    order: fallback.order || null,
+    paymentLink: "",
     diff,
     payableDiff,
     refundOrCredit,
-    negativeAccepted,
-    negativeError,
-    amountMode: created.amountMode,
-    tag: exchangeTag,
-    input: created.input
+    negativeAccepted: false,
+    negativeError: "",
+    amountMode: "tag-only-no-new-order",
+    tag: fallback.tag || null,
+    taggedOnly: true,
+    noNewOrder: true,
+    input: {
+      reason: inputData.reason || "",
+      originalOrderNumber: inputData.originalOrderNumber || "",
+      note: diff > 0
+        ? `Yeni ürün daha pahalı. Ek ödeme panelde takip edilir: ${payableDiff.toFixed(2)}`
+        : diff < 0
+          ? `Yeni ürün daha ucuz. Geri ödeme/kupon panelde takip edilir: ${refundOrCredit.toFixed(2)}`
+          : "Fiyat farkı yok. Değişim panelde takip edilir."
+    }
   };
 }
 
@@ -5846,6 +5765,27 @@ function adminHtml(serverAdmin) {
   border-color:rgba(119,204,146,.35) !important;
 }
 
+
+
+/* V117: ikas requires at least one transaction */
+.exchange-sync-hint{
+  color:#d8b66f !important;
+}
+
+
+
+/* V118: no ikas order for cheaper/equal exchanges */
+.exchange-sync-hint{
+  color:#d8b66f !important;
+}
+
+
+
+/* V119: never create new ikas order for exchange */
+.exchange-sync-hint{
+  color:#d8b66f !important;
+}
+
 </style>
 </head>
 <body>
@@ -6478,7 +6418,7 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     });
     lines=lines.join('');
     var reasonOptions=['Kararma','Yeşil iz bırakma','Zincir Kopması'].map(function(r){return '<option value="'+escapeHtml(r)+'" '+(rec&&rec.reason===r?'selected':'')+'>'+escapeHtml(r)+'</option>'}).join('');
-    return '<div class="exchange-order-card" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+' — '+escapeHtml(o.customer||'')+(rec?'<span class="exchange-chip">Değişim yapıldı</span>':'')+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.packageStatus||o.status||'')+'</div></div><span class="badge '+(rec?'exchange-done':'')+'">'+(rec?'Değişim yapıldı':escapeHtml(o.packageStatus||o.status||'Yeni'))+'</span></div>'+lines+'<div class="exchange-form-row"><div class="field"><label>Değişim nedeni</label><select class="input exchange-reason"><option value="">Sebep seç</option>'+reasonOptions+'</select></div><div class="field"><label>Değişim hatırlatma zamanı</label><input class="input exchange-reminder-at" type="datetime-local" value="'+escapeHtml(rec&&rec.reminderAt?String(rec.reminderAt).slice(0,16):'')+'"></div><button class="btn gold exchange-save" data-order-id="'+escapeHtml(o.id)+'">Değişimi Kaydet</button><button class="btn ghost exchange-sync" data-order-id="'+escapeHtml(o.id)+'">İkas’a İşle</button></div><div class="exchange-sync-hint">'+(rec&&Array.isArray(rec.changes)&&rec.changes.some(function(ch){return ch.ikasExchangeOrderId||ch.ikasSyncStatus==='success'||ch.ikasSyncStatus==='tagged'})?'Bu değişim ikas’a işlendi, tekrar işlenemez.':'Daha ucuz üründe önce eksi tutar denenir; ikas kabul etmezse 0 TL değişim siparişi açılır.')+'</div></div>';
+    return '<div class="exchange-order-card" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+' — '+escapeHtml(o.customer||'')+(rec?'<span class="exchange-chip">Değişim yapıldı</span>':'')+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.packageStatus||o.status||'')+'</div></div><span class="badge '+(rec?'exchange-done':'')+'">'+(rec?'Değişim yapıldı':escapeHtml(o.packageStatus||o.status||'Yeni'))+'</span></div>'+lines+'<div class="exchange-form-row"><div class="field"><label>Değişim nedeni</label><select class="input exchange-reason"><option value="">Sebep seç</option>'+reasonOptions+'</select></div><div class="field"><label>Değişim hatırlatma zamanı</label><input class="input exchange-reminder-at" type="datetime-local" value="'+escapeHtml(rec&&rec.reminderAt?String(rec.reminderAt).slice(0,16):'')+'"></div><button class="btn gold exchange-save" data-order-id="'+escapeHtml(o.id)+'">Değişimi Kaydet</button><button class="btn ghost exchange-sync" data-order-id="'+escapeHtml(o.id)+'">İkas’a İşle</button></div><div class="exchange-sync-hint">'+(rec&&Array.isArray(rec.changes)&&rec.changes.some(function(ch){return ch.ikasExchangeOrderId||ch.ikasSyncStatus==='success'||ch.ikasSyncStatus==='tagged'})?'Bu değişim ikas’a işlendi, tekrar işlenemez.':'Rapor bozulmasın diye hiçbir değişimde yeni ikas siparişi açılmaz; sadece DEĞİŞİM etiketi işlenir.')+'</div></div>';
   }
   function collectExchangePayload(orderId){
     var orders=ikasSummary.orders||[];
@@ -6582,14 +6522,16 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
       pack.changes=pack.changes.map(function(ch){
         ch.ikasSyncStatus=tagged?'tagged':'success';
         if(link && Number(ch.priceDiff||0)>0){ch.financeStatus='payment_link_sent';ch.financeLink=link;}
-        if(newOrder&&newOrder.id){ch.ikasExchangeOrderId=newOrder.id;ch.ikasExchangeOrderNumber=newOrder.orderNumber||'';}
+        if(newOrder&&newOrder.id&&!tagged){ch.ikasExchangeOrderId=newOrder.id;ch.ikasExchangeOrderNumber=newOrder.orderNumber||'';}
         return ch;
       });
       pack.payload.changes=pack.changes;
       return api('/api/admin/exchanges',{method:'POST',body:JSON.stringify(pack.payload)}).then(function(){return d});
     }).then(function(d){
       if(d.tagged){
-        toast('İkas eski siparişine DEĞİŞİM etiketi işlendi');
+        if(d.payableDiff>0) toast('Yeni sipariş açılmadı; ek ödeme panelde takip edilecek');
+        else if(d.refundOrCredit>0) toast('Yeni sipariş açılmadı; geri ödeme/kupon panelde takip edilecek');
+        else toast('Yeni sipariş açılmadı; eski siparişe DEĞİŞİM etiketi işlendi');
       }else if(d.exchangeOrder&&d.exchangeOrder.orderNumber){
         if(d.negativeAccepted) toast('Eksi fiyat farkı siparişi oluşturuldu');
         else if(d.refundOrCredit>0) toast('İkas eksi tutarı kabul etmedi, 0 TL değişim siparişi oluşturuldu');
@@ -6790,7 +6732,7 @@ function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFrac
     link=String(link||'');
     if(diff>0){
       selected=selected||'payment_pending';
-      return '<div class="exchange-finance-row"><select class="input exchange-finance-status"><option value="payment_pending"'+selectedAttr('payment_pending',selected)+'>Ödeme bekliyor</option><option value="payment_received"'+selectedAttr('payment_received',selected)+'>Ödeme alındı</option><option value="payment_link_sent"'+selectedAttr('payment_link_sent',selected)+'>Ödeme linki gönderildi</option></select><button type="button" class="btn ghost exchange-create-payment-link">Ödeme linki oluştur</button><button type="button" class="btn ghost exchange-copy-payment">Mesajı kopyala</button></div><input class="input exchange-finance-link" readonly placeholder="Ödeme linki oluşturulunca burada görünür" value="'+escapeHtml(link)+'"><div class="finance-note">Ödeme linki ikas generateOrderPaymentLink ile gerçek siparişten oluşturulur.</div>';
+      return '<div class="exchange-finance-row"><select class="input exchange-finance-status"><option value="payment_pending"'+selectedAttr('payment_pending',selected)+'>Ödeme bekliyor</option><option value="payment_received"'+selectedAttr('payment_received',selected)+'>Ödeme alındı</option><option value="payment_link_sent"'+selectedAttr('payment_link_sent',selected)+'>Ödeme linki gönderildi</option></select><button type="button" class="btn ghost exchange-create-payment-link">Link yok / mesaj hazırla</button><button type="button" class="btn ghost exchange-copy-payment">Mesajı kopyala</button></div><input class="input exchange-finance-link" readonly placeholder="Link yok / mesaj hazırlaulunca burada görünür" value="'+escapeHtml(link)+'"><div class="finance-note">İkas raporu bozulmasın diye yeni sipariş açılmaz; ek ödeme panelde/manuel takip edilir.</div>';
     }
     if(diff<0){
       selected=selected||'refund_pending';
@@ -7057,38 +6999,13 @@ function renderExchangeNotes(){
     var createPayment=e.target.closest&&e.target.closest('.exchange-create-payment-link');
     if(createPayment){
       e.preventDefault();
-      var card=createPayment.closest('.exchange-order-card');
       var line0=createPayment.closest('.exchange-line');
-      var orderId=card&&card.getAttribute('data-order-id')||'';
-      var linkInput=line0&&line0.querySelector('.exchange-finance-link');
-      var statusSel=line0&&line0.querySelector('.exchange-finance-status');
-      var wrap0=line0&&line0.querySelector('.exchange-pick-wrap');
-      createPayment.disabled=true;
-      createPayment.textContent='Oluşturuluyor...';
-      if(linkInput)linkInput.value='İkas ödeme linki oluşturuluyor...';
-      api('/api/admin/ikas/payment-link',{method:'POST',body:JSON.stringify({orderId:orderId})}).then(function(d){
-        if(d&&d.ok&&d.paymentLink){
-          var link=d.paymentLink||'';
-          if(linkInput)linkInput.value=link;
-          if(statusSel)statusSel.value='payment_link_sent';
-          if(wrap0)saveExchangeDraft(wrap0,{financeStatus:'payment_link_sent',financeLink:link});
-          if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(link).catch(function(){});
-          toast('Ödeme linki oluşturuldu ve kopyalandı');
-        }else{
-          var msg=(d&&d.message)||'İkas ödeme linki boş döndü. Önce değişimi ikas siparişine işlememiz gerekiyor.';
-          if(linkInput)linkInput.value=msg;
-          if(statusSel)statusSel.value='payment_pending';
-          if(wrap0)saveExchangeDraft(wrap0,{financeStatus:'payment_pending',financeLink:''});
-          toast('İkas ödeme linki boş döndü');
-        }
-      }).catch(function(err){
-        var msg2='Ödeme linki oluşturulamadı: '+(err&&err.message?err.message:err);
-        if(linkInput)linkInput.value=msg2;
-        toast('Ödeme linki oluşturulamadı');
-      }).finally(function(){
-        createPayment.disabled=false;
-        createPayment.textContent='Ödeme linki oluştur';
-      });
+      var diffBox0=line0&&line0.querySelector('.exchange-price-diff');
+      var amount0=(diffBox0&&diffBox0.textContent.match(/₺\s*[0-9.,]+/)||[''])[0];
+      var product0=line0&&line0.querySelector('.exchange-product-name')?line0.querySelector('.exchange-product-name').value:'ürün';
+      var msg0='Merhaba, değişim işleminizde '+(amount0||'fiyat farkı')+' ek ödeme oluşmuştur. İkas raporlarının doğru kalması için yeni sipariş açmadan, ödeme sonrası değişim gönderiminizi hazırlayacağız. Yeni ürün: '+product0;
+      if(navigator.clipboard&&navigator.clipboard.writeText)navigator.clipboard.writeText(msg0).then(function(){toast('Ek ödeme mesajı kopyalandı')}).catch(function(){toast(msg0)});
+      else toast(msg0);
       return;
     }
 
