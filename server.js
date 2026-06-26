@@ -1164,6 +1164,37 @@ async function handleAdminApi(req, res, url) {
     }
   }
 
+  if (req.method === "GET" && pathname === "/api/admin/ikas/product-price-variant-check") {
+    try {
+      const summary = await buildIkasSummaryFresh();
+      const products = summary.products || [];
+      const totals = {
+        products: products.length,
+        variants: products.reduce((sum, product) => sum + ((product.variants || []).length), 0),
+        variantsWithPrice: products.reduce((sum, product) => sum + (product.variants || []).filter((variant) => Number(variant.sellPrice || variant.discountPrice || 0) > 0).length, 0),
+        variantsWithoutPrice: products.reduce((sum, product) => sum + (product.variants || []).filter((variant) => !Number(variant.sellPrice || variant.discountPrice || 0)).length, 0),
+        productsWithoutVariants: products.filter((product) => !(product.variants || []).length).length,
+        productsWithImage: products.filter((product) => product.image).length,
+        productsWithoutImage: products.filter((product) => !product.image).length
+      };
+      const examples = products.slice(0, 25).map((product) => ({
+        id: product.id,
+        name: product.name,
+        variantCount: (product.variants || []).length,
+        variants: (product.variants || []).slice(0, 8).map((variant) => ({
+          id: variant.id,
+          sku: variant.sku,
+          variantText: variant.variantText,
+          sellPrice: variant.sellPrice,
+          discountPrice: variant.discountPrice
+        }))
+      }));
+      return sendJson(res, { ok: true, totals, examples });
+    } catch (error) {
+      return sendJson(res, { ok: false, error: error && error.message ? error.message : String(error) }, 200);
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/ikas/summary") {
     try {
       const fast = url.searchParams.get("fast") === "1";
@@ -1647,16 +1678,12 @@ async function tagIkasOrderAsExchange(orderId) {
 
   const query = `
     mutation RuthAddOrderTag($input: UpdateOrderTagInput!) {
-      addOrderTag(input: $input) {
-        id
-        orderNumber
-        orderTagIds
-      }
+      addOrderTag(input: $input)
     }
   `;
   try {
     const data = await ikasGraphQL(query, { input: { orderId: id, orderTagId: tag.id } }, "ikas tag exchange order");
-    return { tag, order: data && data.addOrderTag ? data.addOrderTag : null };
+    return { tag, order: { id, addOrderTag: Boolean(data && data.addOrderTag), orderTagIds: [tag.id] } };
   } catch (error) {
     const msg = error && error.message ? error.message : String(error || "");
     if (/already|duplicate|exists|zaten|mevcut/i.test(msg)) {
@@ -2460,6 +2487,155 @@ function extractIkasVariantPrice(prices) {
   };
 }
 
+
+function extractIkasImageHint(item) {
+  const value = item || {};
+  const direct =
+    valueOrEmpty(value.imageUrl) ||
+    valueOrEmpty(value.url) ||
+    valueOrEmpty(value.src) ||
+    valueOrEmpty(value.originalSrc) ||
+    valueOrEmpty(value.thumbnailUrl) ||
+    valueOrEmpty(value.previewUrl) ||
+    "";
+  if (direct) return direct;
+
+  const nested =
+    value.mainImage ||
+    value.image ||
+    value.thumbnailImage ||
+    value.thumbnail ||
+    null;
+  if (nested && typeof nested === "object") {
+    const nestedUrl = extractIkasImageHint(nested);
+    if (nestedUrl) return nestedUrl;
+  }
+
+  const images = Array.isArray(value.images) ? value.images : [];
+  for (const image of images) {
+    const found = extractIkasImageHint(image);
+    if (found) return found;
+  }
+
+  const id = valueOrEmpty(value.mainImageId || value.imageId || value.fileId || value.thumbnailImageId);
+  return buildIkasImageUrl(id);
+}
+
+function normalizeIkasProductImageHints(rows) {
+  return (Array.isArray(rows) ? rows : []).map((product) => ({
+    id: valueOrEmpty(product && product.id),
+    name: valueOrEmpty(product && product.name),
+    slug: valueOrEmpty(product && (product.slug || product.handle)),
+    image: extractIkasImageHint(product),
+    mainImageId: valueOrEmpty(product && (product.mainImageId || product.imageId || product.fileId)),
+    variants: Array.isArray(product && product.variants) ? product.variants.map((variant) => ({
+      id: valueOrEmpty(variant && variant.id),
+      sku: valueOrEmpty(variant && variant.sku),
+      image: extractIkasImageHint(variant),
+      mainImageId: valueOrEmpty(variant && (variant.mainImageId || variant.imageId || variant.fileId))
+    })).filter((variant) => variant.id || variant.sku || variant.image) : []
+  })).filter((product) => product.id || product.name || product.image || product.slug);
+}
+
+async function fetchIkasProductImageHints() {
+  if (!ikasConfigured()) return [];
+  const attempts = [
+    {
+      label: "ikas product image hints full",
+      fields: `
+        id
+        name
+        slug
+        mainImageId
+        imageId
+        images { id imageId fileId url imageUrl }
+        variants {
+          id
+          sku
+          mainImageId
+          imageId
+          images { id imageId fileId url imageUrl }
+        }
+      `
+    },
+    {
+      label: "ikas product image hints mainImage",
+      fields: `
+        id
+        name
+        slug
+        mainImageId
+        variants { id sku mainImageId }
+      `
+    },
+    {
+      label: "ikas product image hints slug",
+      fields: `
+        id
+        name
+        slug
+        variants { id sku }
+      `
+    }
+  ];
+
+  const errors = [];
+  for (const attempt of attempts) {
+    try {
+      const rows = await fetchIkasPaginatedList({
+        label: attempt.label,
+        rootField: "listProduct",
+        fields: attempt.fields,
+        normalize: normalizeIkasProductImageHints,
+        maxPages: 180
+      });
+      if (Array.isArray(rows)) return rows;
+    } catch (error) {
+      errors.push(`${attempt.label}: ${error && error.message ? error.message : String(error)}`);
+    }
+  }
+  if (errors.length && String(process.env.IKAS_IMAGE_DEBUG_LOGS || "0") === "1") {
+    console.error("ikas product image hint attempts failed:", errors.join(" || ").slice(0, 1800));
+  }
+  return [];
+}
+
+function mergeIkasProductImageHints(products, hints) {
+  const byId = new Map();
+  const byName = new Map();
+  const byVariantId = new Map();
+  (Array.isArray(hints) ? hints : []).forEach((hint) => {
+    if (hint.id) byId.set(String(hint.id), hint);
+    if (hint.name) byName.set(normalizeLookupText(hint.name), hint);
+    (hint.variants || []).forEach((variant) => {
+      if (variant.id) byVariantId.set(String(variant.id), variant);
+    });
+  });
+
+  return (Array.isArray(products) ? products : []).map((product) => {
+    const hint = byId.get(String(product.id || "")) || byName.get(normalizeLookupText(product.name || "")) || null;
+    const next = { ...product };
+    if (hint) {
+      if (!next.slug && hint.slug) next.slug = hint.slug;
+      if (!next.image && hint.image) next.image = hint.image;
+      if (!next.mainImageId && hint.mainImageId) next.mainImageId = hint.mainImageId;
+    }
+    next.variants = (next.variants || []).map((variant) => {
+      const vh = byVariantId.get(String(variant.id || ""));
+      if (!vh) return variant;
+      return {
+        ...variant,
+        image: variant.image || vh.image || "",
+        mainImageId: variant.mainImageId || vh.mainImageId || "",
+        sku: variant.sku || vh.sku || ""
+      };
+    });
+    if (!next.image) next.image = (next.variants || []).find((variant) => variant.image)?.image || "";
+    return next;
+  });
+}
+
+
 async function fetchIkasProducts(categories = []) {
   if (!ikasConfigured()) return [];
   const categoryMap = new Map((categories || []).map((category) => [String(category.id), category]));
@@ -2468,36 +2644,6 @@ async function fetchIkasProducts(categories = []) {
   const normalize = (rows) => normalizeIkasProducts(rows, categoryMap, variantTypeMap);
 
   const attempts = [
-    {
-      label: "ikas products bundle-products-mapped",
-      fields: `
-        id
-        name
-        type
-        categoryIds
-        productVariantTypes {
-          order
-          variantTypeId
-          variantValueIds
-        }
-        variants {
-          id
-          sku
-          variantValueIds {
-            variantTypeId
-            variantValueId
-          }
-          prices { sellPrice discountPrice }
-          bundleProducts {
-            id
-            productId
-            quantity
-            order
-            variant { id name sku productId }
-          }
-        }
-      `
-    },
     {
       label: "ikas products mapped-variants-prices",
       fields: `
@@ -2715,22 +2861,10 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map(), variantType
         sellPrice: priceInfo.sellPrice,
         discountPrice: priceInfo.discountPrice,
         stock: stockFromStocks,
-        isActive: typeof variant.isActive === "boolean" ? variant.isActive : true,
-        bundleProducts: Array.isArray(variant.bundleProducts)
-          ? variant.bundleProducts.map((bp) => ({
-              id: valueOrEmpty(bp && bp.id),
-              productId: valueOrEmpty(bp && bp.productId) || valueOrEmpty(bp && bp.variant && bp.variant.productId),
-              variantId: valueOrEmpty(bp && bp.variant && bp.variant.id),
-              name: valueOrEmpty(bp && bp.name) || valueOrEmpty(bp && bp.variant && bp.variant.name) || "Paket içeriği",
-              sku: valueOrEmpty(bp && bp.variant && bp.variant.sku),
-              quantity: Number(bp && bp.quantity || 1),
-              order: Number(bp && bp.order || 0)
-            })).filter((bp) => bp.productId || bp.variantId || bp.name)
-          : []
+        isActive: typeof variant.isActive === "boolean" ? variant.isActive : true
       };
     }) : [];
 
-    const bundleItems = variants.reduce((list, variant) => list.concat(Array.isArray(variant.bundleProducts) ? variant.bundleProducts : []), []);
     const image = "";
     return {
       id: valueOrEmpty(product.id),
@@ -2743,8 +2877,6 @@ function normalizeIkasProducts(rawProducts, categoryMap = new Map(), variantType
       categories,
       variantTypes: productVariantTypes.sort((a, b) => Number(a.order || 0) - Number(b.order || 0)),
       variants,
-      isBundle: String(product.type || "").toUpperCase().indexOf("BUNDLE") >= 0 || bundleItems.length > 0,
-      bundleItems,
       createdAt: normalizeIkasDate(product.createdAt),
       updatedAt: normalizeIkasDate(product.updatedAt)
     };
@@ -2756,8 +2888,19 @@ function mergeOrderImagesIntoProducts(products, orders) {
   const byVariantId = new Map();
   orders.forEach((order) => {
     (order.items || []).forEach((item) => {
-      if (item.productId && (item.image || item.mainImageId)) byProductId.set(item.productId, { image: item.image, mainImageId: item.mainImageId });
-      if (item.variantId && (item.image || item.mainImageId)) byVariantId.set(item.variantId, { image: item.image, mainImageId: item.mainImageId });
+      if (item.productId && (item.image || item.mainImageId)) {
+        const old = byProductId.get(item.productId) || {};
+        byProductId.set(item.productId, { ...old, image: item.image, mainImageId: item.mainImageId });
+      }
+      if (item.variantId && (item.image || item.mainImageId || Number(item.unitPrice || item.totalPrice) > 0)) {
+        const old = byVariantId.get(item.variantId) || {};
+        byVariantId.set(item.variantId, {
+          ...old,
+          image: item.image || old.image || "",
+          mainImageId: item.mainImageId || old.mainImageId || "",
+          unitPrice: Number(item.unitPrice || (Number(item.totalPrice || 0) / Math.max(1, Number(item.quantity || 1))) || old.unitPrice || 0)
+        });
+      }
     });
   });
   return products.map((product) => {
@@ -2769,14 +2912,21 @@ function mergeOrderImagesIntoProducts(products, orders) {
     }
     next.variants = (next.variants || []).map((variant) => {
       const fromVariant = byVariantId.get(variant.id);
-      if (!variant.image && fromVariant) return { ...variant, image: fromVariant.image || buildIkasImageUrl(fromVariant.mainImageId), mainImageId: variant.mainImageId || fromVariant.mainImageId || "" };
-      return variant;
+      if (!fromVariant) return variant;
+      const patched = { ...variant };
+      if (!patched.image && (fromVariant.image || fromVariant.mainImageId)) {
+        patched.image = fromVariant.image || buildIkasImageUrl(fromVariant.mainImageId);
+        patched.mainImageId = patched.mainImageId || fromVariant.mainImageId || "";
+      }
+      if (!Number(patched.sellPrice || 0) && Number(fromVariant.unitPrice || 0) > 0) {
+        patched.sellPrice = Number(fromVariant.unitPrice || 0);
+      }
+      return patched;
     });
     if (!next.image) next.image = (next.variants || []).find((variant) => variant.image)?.image || "";
     return next;
   });
 }
-
 
 function enrichOrdersWithProducts(orders, products) {
   const byVariantId = new Map();
@@ -2950,6 +3100,15 @@ async function buildIkasSummaryFresh() {
     productError = error && error.message ? error.message : "ürünler çekilemedi";
     console.error("ikas products error:", productError);
     products = [];
+  }
+
+  try {
+    const imageHints = await fetchIkasProductImageHints();
+    products = mergeIkasProductImageHints(products, imageHints);
+  } catch (error) {
+    if (String(process.env.IKAS_IMAGE_DEBUG_LOGS || "0") === "1") {
+      console.error("ikas product image hint merge error:", error && error.message ? error.message : error);
+    }
   }
 
   orders = enrichOrdersWithProducts(orders, products);
@@ -4358,6 +4517,17 @@ class SupabaseStore {
 
 function serveStatic(req, res, url) {
   if (req.method !== "GET") return false;
+
+  if (url.pathname === "/ruth-sidebar-wordmark-v134.png") {
+    const filePath = path.join(__dirname, "ruth-sidebar-wordmark-v134.png");
+    if (fs.existsSync(filePath)) return sendFile(res, filePath);
+  }
+
+  if (url.pathname === "/ruth-sidebar-animal-v134.png") {
+    const filePath = path.join(__dirname, "ruth-sidebar-animal-v134.png");
+    if (fs.existsSync(filePath)) return sendFile(res, filePath);
+  }
+
 
   if (url.pathname === "/ruth-sidebar-wordmark-v127.png") {
     return sendBinary(res, Buffer.from(RUTH_FULL_LOGO_V91_BASE64, "base64"), "image/png");
@@ -6983,6 +7153,180 @@ function adminHtml(serverAdmin) {
   }
 }
 
+
+
+/* V134: sol üst büyük Ruth Istanbul logo düzeni */
+.ruth-side-logo-head{
+  min-height:86px !important;
+  height:86px !important;
+  padding:10px 12px !important;
+  justify-content:flex-start !important;
+  align-items:center !important;
+  gap:10px !important;
+  overflow:visible !important;
+}
+.ruth-sidebar-animal-free{
+  width:64px !important;
+  height:64px !important;
+  min-width:64px !important;
+  object-fit:contain !important;
+  display:block !important;
+  border:0 !important;
+  background:transparent !important;
+  box-shadow:none !important;
+}
+.ruth-side-logo-head .ruth-sidebar-full-logo{
+  width:172px !important;
+  max-width:172px !important;
+  height:64px !important;
+  object-fit:contain !important;
+  object-position:left center !important;
+  display:block !important;
+}
+.ruth-side-logo-head .mini-animal-mark,
+.ruth-side-logo-head .brand-mark{
+  display:none !important;
+  border:0 !important;
+  background:transparent !important;
+  box-shadow:none !important;
+}
+.app.nav-mini .ruth-side-logo-head{
+  justify-content:center !important;
+  padding:8px 6px !important;
+}
+.app.nav-mini .ruth-sidebar-animal-free{
+  width:42px !important;
+  height:42px !important;
+  min-width:42px !important;
+}
+.app.nav-mini .ruth-side-logo-head .ruth-sidebar-full-logo{
+  display:none !important;
+}
+@media(max-width:820px){
+  .ruth-side-logo-head{
+    min-height:78px !important;
+    height:78px !important;
+    padding:8px 10px !important;
+    gap:8px !important;
+  }
+  .ruth-sidebar-animal-free{
+    width:58px !important;
+    height:58px !important;
+    min-width:58px !important;
+  }
+  .ruth-side-logo-head .ruth-sidebar-full-logo{
+    width:158px !important;
+    max-width:158px !important;
+    height:58px !important;
+  }
+}
+
+
+
+/* V136: badge outline hard override + mobile order overflow fix */
+.nav-badge,
+.nav-item .nav-badge,
+.nav-item .badge,
+.badge,
+.panel-head .badge{
+  background:transparent !important;
+  box-shadow:none !important;
+}
+.nav-badge,
+.nav-item .nav-badge{
+  color:#f0c66b !important;
+  border:1px solid rgba(240,198,107,.68) !important;
+}
+.badge.status-ready,
+.status-ready{
+  color:#67b7ff !important;
+  border-color:rgba(103,183,255,.75) !important;
+  background:rgba(103,183,255,.04) !important;
+}
+.badge.status-delivered,
+.status-delivered{
+  color:#6ee28f !important;
+  border-color:rgba(110,226,143,.75) !important;
+  background:rgba(110,226,143,.04) !important;
+}
+.badge.status-refund,
+.return-done,
+.return-chip{
+  color:#ff746d !important;
+  border-color:rgba(255,116,109,.76) !important;
+  background:rgba(255,116,109,.045) !important;
+}
+.badge.status-exchange,
+.exchange-done,
+.exchange-chip{
+  color:#f0c66b !important;
+  border-color:rgba(240,198,107,.76) !important;
+  background:rgba(240,198,107,.045) !important;
+}
+@media(max-width:820px){
+  html,body,.app,.main,.content,.page{
+    max-width:100vw !important;
+    overflow-x:hidden !important;
+  }
+  .content{
+    padding-left:10px !important;
+    padding-right:10px !important;
+    width:100% !important;
+    box-sizing:border-box !important;
+  }
+  #page-orders .orders-grid,
+  #page-ikas-orders .orders-grid{
+    grid-template-columns:minmax(0,1fr) !important;
+    width:100% !important;
+    max-width:100% !important;
+    overflow:hidden !important;
+  }
+  #page-orders .panel,
+  #page-ikas-orders .panel,
+  #ordersList,
+  #deliveredOrdersList,
+  .order-card{
+    width:100% !important;
+    max-width:100% !important;
+    min-width:0 !important;
+    box-sizing:border-box !important;
+    overflow:hidden !important;
+  }
+  .order-card{
+    padding:14px 12px !important;
+  }
+  .order-card>.row{
+    display:grid !important;
+    grid-template-columns:minmax(0,1fr) auto !important;
+    align-items:start !important;
+    gap:8px !important;
+  }
+  .order-card .name,
+  .order-card .preview{
+    min-width:0 !important;
+    overflow-wrap:anywhere !important;
+  }
+  .order-products,
+  .order-product{
+    max-width:100% !important;
+    min-width:0 !important;
+  }
+  .order-product{
+    grid-template-columns:54px minmax(0,1fr) auto !important;
+    gap:10px !important;
+  }
+  .order-product .name,
+  .order-product .preview{
+    overflow-wrap:anywhere !important;
+    white-space:normal !important;
+  }
+  .order-product .badge,
+  .order-card .badge{
+    white-space:nowrap !important;
+    max-width:42vw !important;
+  }
+}
+
 </style>
 </head>
 <body>
@@ -7056,7 +7400,7 @@ function adminHtml(serverAdmin) {
   <section id="app" class="app hidden">
     <div id="drawerShade" class="drawer-shade"></div>
     <aside class="sidebar">
-      <div class="side-head ruth-side-logo-head"><div class="brand-mark animal-mark mini-animal-mark" title="Ruth Istanbul"><img class="ruth-logo-img ruth-animal-img" src="/ruth-animal-logo-v91.png" alt="Ruth Istanbul"></div><img class="ruth-sidebar-full-logo" src="/ruth-full-logo-v91.png" alt="Ruth Istanbul"></div>
+      <div class="side-head ruth-side-logo-head"><img class="ruth-sidebar-animal-free" src="/ruth-sidebar-animal-v134.png" alt="Ruth Istanbul"><img class="ruth-sidebar-full-logo" src="/ruth-sidebar-wordmark-v134.png" alt="Ruth Istanbul"></div>
       <nav class="nav">
         <button class="nav-item active" data-route="overview"><span class="nav-ico"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2"/><rect x="4" y="13" width="7" height="7" rx="2"/><rect x="13" y="13" width="7" height="7" rx="2"/></svg></span><span class="nav-label">Genel Bakış</span></button>
         <div class="nav-heading">İLETİŞİM</div>
@@ -7473,10 +7817,11 @@ function adminHtml(serverAdmin) {
   function statusPill(c){return '<span class="status-pill '+statusClass(c)+'">'+statusLabel(c)+'</span>'}
   function badgeClassForText(text){
     var t=String(text||'').toLocaleLowerCase('tr');
-    if(t.indexOf('kargoya hazır')>=0||t.indexOf('hazır')>=0)return 'status-ready';
-    if(t.indexOf('teslim')>=0)return 'status-delivered';
-    if(t.indexOf('iade')>=0)return 'return-done status-refund';
-    if(t.indexOf('değişim')>=0)return 'exchange-done status-exchange';
+    var plain=t.replace(/ı/g,'i').replace(/İ/g,'i');
+    if(t.indexOf('kargoya hazır')>=0||t.indexOf('hazır')>=0||plain.indexOf('kargoya hazir')>=0||plain.indexOf('ready')>=0)return 'status-ready';
+    if(t.indexOf('teslim')>=0||plain.indexOf('delivered')>=0)return 'status-delivered';
+    if(t.indexOf('iade')>=0||plain.indexOf('iade')>=0||plain.indexOf('refund')>=0||plain.indexOf('return')>=0)return 'return-done status-refund';
+    if(t.indexOf('değişim')>=0||plain.indexOf('degisim')>=0||plain.indexOf('exchange')>=0)return 'exchange-done status-exchange';
     if(t.indexOf('ikas')>=0)return 'ikas-done';
     return '';
   }
@@ -7986,7 +8331,6 @@ function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFrac
     if(returnOrdersPage<1)returnOrdersPage=1;
     if(returnOrdersPage>pageCount)returnOrdersPage=pageCount;
     var pageItems=orders.slice((returnOrdersPage-1)*pageSize,returnOrdersPage*pageSize);
-    if(!selectedReturnOrderId && pageItems.length)selectedReturnOrderId=pageItems[0].id;
     var pager='';
     if(orders.length>pageSize){
       var buttons=[];
@@ -7997,9 +8341,9 @@ function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFrac
       pager='<div class="exchange-pagination"><button type="button" class="btn ghost return-page-btn" data-page="'+Math.max(1,returnOrdersPage-1)+'">‹</button>'+buttons.join('')+'<button type="button" class="btn ghost return-page-btn" data-page="'+Math.min(pageCount,returnOrdersPage+1)+'">›</button></div>';
     }
     root.innerHTML=pageItems.length?pageItems.map(function(o){var r=orderReturnRecord(o);var done=returnIkasDone(r);var statusText=r?'İade Edildi':(o.packageStatus||o.status||'Yeni');var selected=String(o.id)===String(selectedReturnOrderId);var inline=selected?'<div class="return-inline-detail">'+returnDetailCard(o)+'</div>':'';return '<div class="customer-row return-order-row '+(selected?'active':'')+'" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+(r?'<span class="return-chip">İade yapıldı</span>':'')+ikasDoneChip(done)+'</div>'+badgeHtml(statusText)+'</div><div class="preview">'+escapeHtml(o.customer||'Müşteri')+' • '+fmtDate(o.orderedAt)+'</div></div>'+inline}).join('')+pager:'<div class="empty">Sipariş bulunamadı.</div>';
-    qsa('#returnOrders .customer-row').forEach(function(row){row.addEventListener('click',function(){selectedReturnOrderId=row.getAttribute('data-order-id')||''; renderReturn();});});
+    qsa('#returnOrders .customer-row').forEach(function(row){row.addEventListener('click',function(){var id=row.getAttribute('data-order-id')||''; selectedReturnOrderId=(String(selectedReturnOrderId)===String(id))?'':id; renderReturn();});});
     qsa('#returnOrders .return-page-btn').forEach(function(btn){btn.addEventListener('click',function(e){e.preventDefault(); returnOrdersPage=Number(btn.getAttribute('data-page')||1); selectedReturnOrderId=''; renderReturn();});});
-    var selected=(ikasSummary.orders||[]).find(function(o){return String(o.id)===String(selectedReturnOrderId)})||pageItems[0];
+    var selected=selectedReturnOrderId?(ikasSummary.orders||[]).find(function(o){return String(o.id)===String(selectedReturnOrderId)}):null;
     if(!selected){setText('returnTitle','Sipariş seç');setText('returnSub','İade edilecek ürünleri seç.');detail.innerHTML='<div class="empty">Sipariş seç.</div>';return;}
     selectedReturnOrderId=selected.id;
     setText('returnTitle',(selected.number||selected.orderNumber||'Sipariş')+' — '+(selected.customer||''));
