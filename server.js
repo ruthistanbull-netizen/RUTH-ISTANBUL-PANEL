@@ -1286,6 +1286,12 @@ async function updateIkasOrderLinesForExchange(orderId, changes, editReason = ""
       updateOrderLine(input: $input) {
         id
         orderNumber
+        orderLineItems {
+          id
+          price
+          quantity
+          variant { id sku }
+        }
       }
     }
   `;
@@ -1296,7 +1302,17 @@ async function updateIkasOrderLinesForExchange(orderId, changes, editReason = ""
     orderLineItems
   };
   const data = await ikasGraphQL(query, { input }, "ikas update order line");
-  return { order: data && data.updateOrderLine ? data.updateOrderLine : null, input };
+  const order = data && data.updateOrderLine ? data.updateOrderLine : null;
+  const returnedLines = Array.isArray(order && order.orderLineItems) ? order.orderLineItems : [];
+  const failed = orderLineItems.filter((sent) => {
+    const line = returnedLines.find((item) => String(item && item.id) === String(sent.id));
+    if (!line) return false;
+    return String(line.variant && line.variant.id || "") !== String(sent.variant && sent.variant.id || "");
+  });
+  if (failed.length) {
+    throw new Error("ikas_update_returned_but_variant_not_changed");
+  }
+  return { order, input };
 }
 
 async function generateIkasOrderPaymentLink(orderId) {
@@ -5976,11 +5992,19 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     (o.items||[]).forEach(function(i,idx){
       var qty=Math.max(1,Number(i.quantity||1));
       for(var unit=1; unit<=qty; unit++){
-        var lineId=String(i.id||idx)+'::'+unit;
+        var baseLineId=String(i.id||idx);
+        var lineId=baseLineId+'::'+unit;
         var unitLabel=qty>1?' <span class="unit-chip">'+unit+'. ürün</span>':'';
         var oldPrice=Number(i.unitPrice||0);
         var draftKey=String(o.id||'order')+'::'+lineId;
         var draft=exchangeDrafts[draftKey]||{};
+        var savedChange=rec&&Array.isArray(rec.changes)?rec.changes.find(function(ch){
+          return String(ch.lineId||'')===String(lineId) || (String(ch.baseLineId||'')===String(baseLineId) && Number(ch.unitIndex||1)===unit) || String(ch.lineId||'').split('::')[0]===String(baseLineId);
+        }):null;
+        if(savedChange && !(draft.productId||draft.productName)){
+          draft={productId:savedChange.toProductId||'',productName:savedChange.toProductName||'',variantId:savedChange.toVariantId||'',variantText:savedChange.toVariantText||'',sku:savedChange.toSku||'',price:Number(savedChange.toPrice||0),financeStatus:savedChange.financeStatus||'',financeLink:savedChange.financeLink||'',image:''};
+          exchangeDrafts[draftKey]=draft;
+        }
         var diffHtml='<div class="exchange-price-diff"><span class="price-muted">Yeni ürün seçince fiyat farkı görünür</span><input type="hidden" class="exchange-finance-status" value="not_selected"></div>';
         if(draft.productId||draft.productName){
           var d=Number(draft.price||0)-oldPrice;
@@ -5988,7 +6012,7 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
           else if(d<0)diffHtml='<div class="exchange-price-diff money-left"><div>Kalan para: <b>'+money(Math.abs(d))+'</b></div>'+financeControlsHtml(d,draft.financeStatus,draft.financeLink)+'</div>';
           else diffHtml='<div class="exchange-price-diff price-even">Fiyat farkı yok'+financeControlsHtml(d,draft.financeStatus,draft.financeLink)+'</div>';
         }
-        lines.push('<div class="exchange-line" data-line-id="'+escapeHtml(lineId)+'" data-base-line-id="'+escapeHtml(i.id||idx)+'" data-unit-index="'+unit+'" data-old-price="'+escapeHtml(oldPrice)+'">'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+unitLabel+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+'Eski fiyat: '+money(oldPrice)+'</div></div><div>'+productPickerHtml(draftKey)+diffHtml+'</div></div>');
+        lines.push('<div class="exchange-line" data-line-id="'+escapeHtml(lineId)+'" data-base-line-id="'+escapeHtml(baseLineId)+'" data-unit-index="'+unit+'" data-old-price="'+escapeHtml(oldPrice)+'">'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+unitLabel+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+'Eski fiyat: '+money(oldPrice)+'</div></div><div>'+productPickerHtml(draftKey)+diffHtml+'</div></div>');
       }
     });
     lines=lines.join('');
@@ -5999,6 +6023,7 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     var orders=ikasSummary.orders||[];
     var o=orders.find(function(x){return String(x.id)===String(orderId)}); if(!o)return null;
     var c=buildIkasCustomers().find(function(x){return x.key===selectedExchangeCustomerKey})||{};
+    var rec=orderExchangeRecord(o);
     var card=null; qsa('.exchange-order-card').forEach(function(x){if(String(x.getAttribute('data-order-id'))===String(orderId))card=x}); if(!card)return null;
     var changes=[];
     Array.prototype.slice.call(card.querySelectorAll('.exchange-line')).forEach(function(line){
@@ -6022,6 +6047,11 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
       var linkValue=financeLink&&new RegExp('^https?://','i').test(String(financeLink.value||''))?financeLink.value:'';
       changes.push({lineId:lineId,baseLineId:baseLineId,fromName:item.name||'Ürün',fromSku:item.sku||'',quantity:1,unitIndex:unitIndex,fromPrice:oldPrice,toPrice:newPrice,priceDiff:diff,financeStatus:financeStatus&&financeStatus.value?financeStatus.value:defaultFinance,financeLink:linkValue,toProductId:val.value,toVariantId:variantVal&&variantVal.value?variantVal.value:'',toProductName:name&&name.value?name.value:val.value,toVariantText:variantText&&variantText.value?variantText.value:'',toSku:sku&&sku.value?sku.value:''});
     });
+    if(!changes.length && rec && Array.isArray(rec.changes)){
+      changes=rec.changes.map(function(ch){
+        return Object.assign({},ch,{baseLineId:ch.baseLineId||String(ch.lineId||'').split('::')[0]});
+      });
+    }
     var reminder=card.querySelector('.exchange-reminder-at');
     var reason=card.querySelector('.exchange-reason');
     return {card:card, order:o, customer:c, changes:changes, payload:{customerKey:c.key||'',customerName:c.name||o.customer||'',customerPhone:c.phone||o.phone||'',customerEmail:c.email||o.email||'',orderId:o.id,orderNumber:o.orderNumber||'',orderDisplay:o.number||o.orderNumber||'',changes:changes,reason:reason&&reason.value||'',reminderAt:reminder&&reminder.value||''}};
@@ -6031,7 +6061,7 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     var pack=collectExchangePayload(orderId);
     if(!pack)return;
     if(!pack.changes.length){toast('Değiştirilecek ürün seç.');return;}
-    api('/api/admin/exchanges',{method:'POST',body:JSON.stringify(pack.payload)}).then(function(){Object.keys(exchangeDrafts).forEach(function(k){if(k.indexOf(String(pack.order.id)+'::')===0)delete exchangeDrafts[k]}); toast('Değişim kaydedildi'); return loadExchangeRecords();}).then(function(){renderExchange(); renderIkas(); renderExchangeNotes();}).catch(function(err){alert('Değişim kaydedilemedi: '+err.message)});
+    api('/api/admin/exchanges',{method:'POST',body:JSON.stringify(pack.payload)}).then(function(){toast('Değişim kaydedildi'); return loadExchangeRecords();}).then(function(){renderExchange(); renderIkas(); renderExchangeNotes();}).catch(function(err){alert('Değişim kaydedilemedi: '+err.message)});
   }
 
   function syncExchangeForOrder(orderId,btn){
