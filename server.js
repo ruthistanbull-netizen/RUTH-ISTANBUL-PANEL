@@ -649,6 +649,16 @@ async function handleAdminApi(req, res, url) {
     return sendJson(res, { ok: true });
   }
 
+  if (req.method === "POST" && pathname === "/api/admin/ikas/exchange-new-order") {
+    try {
+      const body = await readJson(req, 2_000_000);
+      const result = await createIkasExchangeOrderForDelivered(body || {});
+      return sendJson(res, { ok: true, created: true, exchangeOrder: result.order, paymentLink: result.paymentLink, diff: result.diff, tag: result.tag || null, input: result.input });
+    } catch (error) {
+      return sendJson(res, { ok: false, created: false, error: "exchange_new_order_failed", message: error && error.message ? error.message : "Yeni değişim siparişi oluşturulamadı." }, 200);
+    }
+  }
+
   if (req.method === "POST" && pathname === "/api/admin/ikas/exchange-sync") {
     try {
       const body = await readJson(req, 2_000_000);
@@ -1276,6 +1286,127 @@ function buildIkasOrderLineUpdateItems(changes) {
   }).filter(Boolean);
 }
 
+
+function splitCustomerName(fullName) {
+  const name = String(fullName || "").trim();
+  if (!name) return { firstName: "Müşteri", lastName: "" };
+  const parts = name.split(/\s+/).filter(Boolean);
+  if (parts.length === 1) return { firstName: parts[0], lastName: "" };
+  return { firstName: parts.slice(0, -1).join(" "), lastName: parts.slice(-1).join(" ") };
+}
+
+function buildIkasExchangeOrderLines(changes) {
+  return (Array.isArray(changes) ? changes : []).map((change) => {
+    const variantId = String(change.toVariantId || "").trim();
+    const productId = String(change.toProductId || "").trim();
+    const price = Number(change.toPrice || 0);
+    const quantity = Math.max(1, Number(change.quantity || 1));
+    if (!variantId || !productId || !(price >= 0)) return null;
+    return {
+      sourceId: productId,
+      price,
+      quantity,
+      variant: {
+        id: variantId,
+        name: String(change.toProductName || change.toVariantText || "Değişim Ürünü").slice(0, 240)
+      }
+    };
+  }).filter(Boolean);
+}
+
+
+async function ensureIkasOrderTagByName(tagName) {
+  const name = String(tagName || "").trim();
+  if (!name) return null;
+  try {
+    const listData = await ikasGraphQL(`query RuthListOrderTags { listOrderTag { id name } }`, {}, "ikas list order tags");
+    const tags = Array.isArray(listData && listData.listOrderTag) ? listData.listOrderTag : [];
+    const existing = tags.find((tag) => String(tag && tag.name || "").trim().toLowerCase() === name.toLowerCase());
+    if (existing && existing.id) return { id: String(existing.id), name: String(existing.name || name) };
+  } catch (error) {
+    console.error("ikas order tag list error:", error && error.message ? error.message.slice(0, 500) : error);
+  }
+  try {
+    const saveData = await ikasGraphQL(
+      `mutation RuthSaveOrderTag($input: OrderTagInput!) { saveOrderTag(input: $input) { id name } }`,
+      { input: { name } },
+      "ikas save order tag"
+    );
+    const tag = saveData && saveData.saveOrderTag ? saveData.saveOrderTag : null;
+    if (tag && tag.id) return { id: String(tag.id), name: String(tag.name || name) };
+  } catch (error) {
+    console.error("ikas order tag save error:", error && error.message ? error.message.slice(0, 500) : error);
+  }
+  return null;
+}
+
+async function createIkasExchangeOrderForDelivered(inputData) {
+  if (!ikasConfigured()) throw new Error("ikas_not_configured");
+  const changes = Array.isArray(inputData && inputData.changes) ? inputData.changes : [];
+  const orderLineItems = buildIkasExchangeOrderLines(changes);
+  if (!orderLineItems.length) throw new Error("orderLineItems_required");
+
+  const totalNew = changes.reduce((sum, change) => sum + Number(change.toPrice || 0) * Math.max(1, Number(change.quantity || 1)), 0);
+  const totalOld = changes.reduce((sum, change) => sum + Number(change.fromPrice || 0) * Math.max(1, Number(change.quantity || 1)), 0);
+  const paidAmount = Math.max(0, Math.min(totalNew, totalOld));
+  const diff = totalNew - totalOld;
+
+  const customerName = splitCustomerName(inputData.customerName || "");
+  const customer = {};
+  if (inputData.customerId) customer.id = String(inputData.customerId);
+  if (inputData.customerEmail) customer.email = String(inputData.customerEmail);
+  customer.firstName = String(customerName.firstName || "Müşteri");
+  customer.lastName = String(customerName.lastName || "");
+
+  const exchangeTag = await ensureIkasOrderTagByName("DEĞİŞİM");
+  const noteLines = [
+    "DEĞİŞİM SİPARİŞİ - NORMAL SATIŞ DEĞİL",
+    "Ruth panel tarafından oluşturuldu.",
+    inputData.originalOrderNumber ? `Eski sipariş: ${inputData.originalOrderNumber}` : "",
+    diff > 0 ? `Ek ödeme bekleniyor: ${diff.toFixed(2)}` : (diff < 0 ? `Geri ödeme/kupon: ${Math.abs(diff).toFixed(2)}` : "Fiyat farkı yok")
+  ].filter(Boolean);
+
+  const query = `
+    mutation RuthCreateExchangeOrder($input: CreateOrderWithTransactionsInput!) {
+      createOrderWithTransactions(input: $input) {
+        id
+        orderNumber
+        orderPaymentStatus
+        totalFinalPrice
+      }
+    }
+  `;
+
+  const order = {
+    currencyCode: "TRY",
+    note: noteLines.join("\\n"),
+    customer,
+    orderLineItems,
+    orderedAt: new Date().toISOString()
+  };
+  if (exchangeTag && exchangeTag.id) order.orderTagIds = [exchangeTag.id];
+
+  const variables = {
+    input: {
+      disableAutoCreateCustomer: false,
+      isTaxFreeOrder: false,
+      order,
+      transactions: [{ amount: paidAmount }]
+    }
+  };
+
+  const data = await ikasGraphQL(query, variables, "ikas create delivered exchange order");
+  const createdOrder = data && data.createOrderWithTransactions ? data.createOrderWithTransactions : null;
+  if (!createdOrder || !createdOrder.id) throw new Error("exchange_order_not_created");
+
+  let paymentLink = "";
+  if (diff > 0) {
+    try { paymentLink = await generateIkasOrderPaymentLink(createdOrder.id); } catch (_) { paymentLink = ""; }
+  }
+
+  return { order: createdOrder, paymentLink, diff, tag: exchangeTag, input: variables.input };
+}
+
 async function updateIkasOrderLinesForExchange(orderId, changes, editReason = "") {
   if (!ikasConfigured()) throw new Error("ikas_not_configured");
   const id = String(orderId || "").trim();
@@ -1405,6 +1536,8 @@ async function fetchIkasOrders() {
         totalPrice
         currencySymbol
         currencyCode
+        note
+        orderTagIds
         customer { id fullName firstName lastName email phone isGuestCheckout }
         shippingAddress { firstName lastName phone city { name } district { name } }
         orderPackages { id orderPackageNumber orderPackageFulfillStatus trackingInfo { cargoCompany trackingNumber trackingLink } }
@@ -1439,6 +1572,8 @@ async function fetchIkasOrders() {
         totalPrice
         currencySymbol
         currencyCode
+        note
+        orderTagIds
         customer { id fullName firstName lastName email phone isGuestCheckout }
         shippingAddress { firstName lastName phone }
         orderLineItems {
@@ -1472,6 +1607,8 @@ async function fetchIkasOrders() {
         totalPrice
         currencySymbol
         currencyCode
+        note
+        orderTagIds
         customer { id fullName firstName lastName email phone }
         orderLineItems {
           id
@@ -1499,6 +1636,8 @@ async function fetchIkasOrders() {
         totalPrice
         currencySymbol
         currencyCode
+        note
+        orderTagIds
       `
     },
     {
@@ -2171,6 +2310,9 @@ function normalizeIkasOrders(rawOrders) {
       orderSort: ikasDateSortValue(dateSource) || Number(order.orderSequence || order.orderNumber || 0),
       total: Number(order.totalFinalPrice ?? order.totalPrice ?? 0),
       currency: valueOrEmpty(order.currencySymbol) || valueOrEmpty(order.currencyCode) || "₺",
+      note: valueOrEmpty(order.note),
+      orderTagIds: Array.isArray(order.orderTagIds) ? order.orderTagIds.map(valueOrEmpty).filter(Boolean) : [],
+      isExchangeOrder: /DEĞİŞİM SİPARİŞİ|Ruth panel değişim siparişi/i.test(valueOrEmpty(order.note)),
       items
     };
   }).sort(orderNewestFirst);
@@ -5413,6 +5555,21 @@ function adminHtml(serverAdmin) {
   margin-top:6px;
 }
 
+
+
+/* V106: delivered exchange creates new ikas order */
+.exchange-sync-hint{
+  color:#d8b66f !important;
+}
+
+
+
+/* V107: exchange order separation */
+.exchange-order-card-flag{
+  border-color:rgba(216,182,111,.45) !important;
+  background:linear-gradient(180deg,rgba(216,182,111,.08),rgba(255,255,255,.018)) !important;
+}
+
 </style>
 </head>
 <body>
@@ -6075,7 +6232,7 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     }
     var reminder=card.querySelector('.exchange-reminder-at');
     var reason=card.querySelector('.exchange-reason');
-    return {card:card, order:o, customer:c, changes:changes, payload:{customerKey:c.key||'',customerName:c.name||o.customer||'',customerPhone:c.phone||o.phone||'',customerEmail:c.email||o.email||'',orderId:o.id,orderNumber:o.orderNumber||'',orderDisplay:o.number||o.orderNumber||'',changes:changes,reason:reason&&reason.value||'',reminderAt:reminder&&reminder.value||''}};
+    return {card:card, order:o, customer:c, changes:changes, payload:{customerKey:c.key||'',customerName:c.name||o.customer||'',customerPhone:c.phone||o.phone||'',customerEmail:c.email||o.email||'',customerId:o.customerId||'',orderId:o.id,orderNumber:o.orderNumber||'',originalOrderNumber:o.number||o.orderNumber||'',orderDisplay:o.number||o.orderNumber||'',changes:changes,reason:reason&&reason.value||'',reminderAt:reminder&&reminder.value||''}};
   }
 
   function saveExchangeForOrder(orderId){
@@ -6094,26 +6251,37 @@ function customerKey(v){return String(v||'').toLowerCase().replace(/\s+/g,' ').t
     if(!confirm('Bu işlem ikas sipariş satırını GERÇEKTEN değiştirecek. Devam edilsin mi?'))return;
     var oldText=btn&&btn.textContent||'İkas’a İşle';
     if(btn){btn.disabled=true;btn.textContent='İşleniyor...';}
-    api('/api/admin/ikas/exchange-sync',{method:'POST',body:JSON.stringify({orderId:pack.order.id,changes:pack.changes,editReason:'Ruth panel değişim: '+(pack.payload.reason||'Değişim')})}).then(function(d){
+    var statusText=[pack.order.packageStatus,pack.order.status,pack.order.paymentStatus].filter(Boolean).join(' / ');
+    var deliveredOrLocked=/Teslim Edildi|Delivered|Tamamlandı|Completed/i.test(statusText);
+    var endpoint=deliveredOrLocked?'/api/admin/ikas/exchange-new-order':'/api/admin/ikas/exchange-sync';
+    var body=deliveredOrLocked?Object.assign({},pack.payload,{changes:pack.changes}):{orderId:pack.order.id,changes:pack.changes,editReason:'Ruth panel değişim: '+(pack.payload.reason||'Değişim')};
+    api(endpoint,{method:'POST',body:JSON.stringify(body)}).then(function(d){
       if(!d||!d.ok){throw new Error(d&&d.message?d.message:'İkas işlemi başarısız');}
       var link=d.paymentLink||'';
+      var newOrder=d.exchangeOrder||null;
       if(link){
         Array.prototype.slice.call(pack.card.querySelectorAll('.exchange-finance-link')).forEach(function(input){input.value=link});
         Array.prototype.slice.call(pack.card.querySelectorAll('.exchange-finance-status')).forEach(function(sel){if(sel.tagName==='SELECT')sel.value='payment_link_sent'});
-        pack.changes=pack.changes.map(function(ch){if(Number(ch.priceDiff||0)>0){ch.financeStatus='payment_link_sent';ch.financeLink=link;ch.ikasSyncStatus='success'}return ch;});
-      }else{
-        pack.changes=pack.changes.map(function(ch){ch.ikasSyncStatus='success';return ch;});
       }
+      pack.changes=pack.changes.map(function(ch){
+        ch.ikasSyncStatus='success';
+        if(link && Number(ch.priceDiff||0)>0){ch.financeStatus='payment_link_sent';ch.financeLink=link;}
+        if(newOrder&&newOrder.id){ch.ikasExchangeOrderId=newOrder.id;ch.ikasExchangeOrderNumber=newOrder.orderNumber||'';}
+        return ch;
+      });
       pack.payload.changes=pack.changes;
       return api('/api/admin/exchanges',{method:'POST',body:JSON.stringify(pack.payload)}).then(function(){return d});
     }).then(function(d){
-      toast(d.paymentLink?'İkas’a işlendi, ödeme linki oluşturuldu':'İkas’a işlendi');
+      if(d.exchangeOrder&&d.exchangeOrder.orderNumber){
+        toast(d.paymentLink?'Yeni değişim siparişi oluşturuldu, ödeme linki alındı':'Yeni değişim siparişi oluşturuldu');
+      }else{
+        toast(d.paymentLink?'İkas’a işlendi, ödeme linki oluşturuldu':'İkas’a işlendi');
+      }
       return loadIkasSummary(false,true).then(function(){return loadExchangeRecords()});
     }).catch(function(err){
       var msg=err&&err.message?err.message:String(err||'');
-      var statusText=[pack.order.packageStatus,pack.order.status,pack.order.paymentStatus].filter(Boolean).join(' / ');
       if(/variant_not_changed|v varyant değişmedi|varyant değişmedi|variant_not_changed/i.test(msg)){
-        msg='İkas siparişi kabul etti gibi göründü ama ürün varyantını gerçekten değiştirmedi. Sipariş durumu: '+(statusText||'bilinmiyor')+'. Teslim edilmiş/kilitli siparişlerde ikas satır değiştirmiyor olabilir. Bu durumda panel kaydı tutulur ama ikas siparişi manuel kontrol edilmeli.';
+        msg='İkas siparişi kabul etti gibi göründü ama ürün varyantını gerçekten değiştirmedi. Sipariş durumu: '+(statusText||'bilinmiyor')+'. Teslim edilmiş/kilitli siparişlerde eski sipariş satırı değişmez; bu yüzden yeni değişim siparişi oluşturma yolu kullanılmalı.';
       }
       alert('İkas’a işlenemedi: '+msg);
     }).finally(function(){
@@ -6408,7 +6576,7 @@ function renderExchangeNotes(){
         var diff=Number(ch.priceDiff||0);
         var diffText=diff>0?' • Ekstra: '+money(diff):(diff<0?' • Kalan: '+money(Math.abs(diff)):'');
         var financeMap={payment_pending:'Ödeme bekliyor',payment_received:'Ödeme alındı',payment_link_sent:'Ödeme linki gönderildi',refund_pending:'Geri ödeme bekliyor',refund_done:'Geri ödeme yapıldı',coupon_given:'Kupon verildi',even:'Fark yok'};
-        var financeText=ch.financeStatus?(' • '+(financeMap[ch.financeStatus]||ch.financeStatus)):''; if(ch.financeLink)financeText+=' • Ödeme linki var';
+        var financeText=ch.financeStatus?(' • '+(financeMap[ch.financeStatus]||ch.financeStatus)):''; if(ch.financeLink)financeText+=' • Ödeme linki var'; if(ch.ikasExchangeOrderNumber)financeText+=' • Yeni ikas siparişi: #'+ch.ikasExchangeOrderNumber;
         return '<div class="exchange-note-product"><span class="changed-product-red">'+escapeHtml(ch.fromName||'Ürün')+(Number(ch.unitIndex||1)>1?' #'+Number(ch.unitIndex):'')+'</span><span class="exchange-arrow">→</span><span>'+escapeHtml(to||'Yeni ürün')+escapeHtml(diffText+financeText)+'</span></div>';
       }).join('');
       return '<div class="exchange-note"><div class="row"><div><div class="name">'+escapeHtml(rec.orderDisplay||rec.orderNumber||'Sipariş')+' — '+escapeHtml(rec.customerName||'Müşteri')+'</div><div class="note-meta">Neden: '+escapeHtml(rec.reason||'Seçilmedi')+' • '+fmtDate(rec.createdAt)+'</div></div><span class="badge exchange-done">Değişim</span></div>'+changes+'</div>';
@@ -6510,7 +6678,7 @@ function renderExchangeNotes(){
   on('noteForm','submit',function(e){e.preventDefault(); if(!activeId)return; var text=$('noteText').value.trim(); if(!text)return; $('noteBtn').disabled=true; api('/api/admin/conversations/'+encodeURIComponent(activeId)+'/notes',{method:'POST',body:JSON.stringify({note:text,reminderAt:$('noteReminder').value||''})}).then(function(){$('noteText').value='';$('noteReminder').value='';loadCrmDetail(activeId);loadReminders();toast('Müşteri notu eklendi')}).catch(function(err){alert('Not eklenemedi: '+err.message)}).finally(function(){$('noteBtn').disabled=false})});
   function imgHtml(src, cls){return '<div class="prod-img '+(cls||'')+'">'+(src?'<img src="'+escapeHtml(src)+'" alt="" loading="lazy">':'◇')+'</div>'}
   function orderProductsHtml(o){var items=o.items||[]; if(!items.length)return '<div class="empty">Ürün yok</div>'; return '<div class="order-products">'+items.map(function(i){return '<div class="order-product">'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+escapeHtml(i.status||'')+'</div></div><div class="badge">× '+Number(i.quantity||0)+'</div></div>'}).join('')+'</div>'}
-  function orderCard(o){var amount=(o.currency||'₺')+' '+Number(o.total||0).toLocaleString('tr-TR'); var ex=orderExchangeRecord(o); var ret=orderReturnRecord(o); var chips=(ex?'<span class="exchange-chip">Değişim yapıldı</span>':'')+(ret?'<span class="return-chip">İade yapıldı</span>':''); var badgeText=ret?'İade yapıldı':(ex?'Değişim yapıldı':escapeHtml(o.packageStatus||o.status||'Yeni')); var badgeClass=ret?'return-done':(ex?'exchange-done':''); return '<div class="order-card '+(ex?'has-exchange':'')+' '+(ret?'has-return':'')+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||'Sipariş')+' — '+escapeHtml(o.customer||'')+chips+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.status||'Durum yok')+' • '+escapeHtml(o.paymentStatus||'')+' • '+amount+'</div></div><span class="badge '+badgeClass+'">'+badgeText+'</span></div>'+orderProductsHtml(o)+'</div>'}
+  function orderCard(o){var amount=(o.currency||'₺')+' '+Number(o.total||0).toLocaleString('tr-TR'); var ex=orderExchangeRecord(o); var ret=orderReturnRecord(o); var isExchangeOrder=!!o.isExchangeOrder; var chips=(isExchangeOrder?'<span class="exchange-chip">DEĞİŞİM SİPARİŞİ</span>':'')+(ex?'<span class="exchange-chip">Değişim yapıldı</span>':'')+(ret?'<span class="return-chip">İade yapıldı</span>':''); var badgeText=isExchangeOrder?'Değişim Siparişi':(ret?'İade yapıldı':(ex?'Değişim yapıldı':escapeHtml(o.packageStatus||o.status||'Yeni'))); var badgeClass=isExchangeOrder?'exchange-done':(ret?'return-done':(ex?'exchange-done':'')); return '<div class="order-card '+(isExchangeOrder?'has-exchange exchange-order-card-flag':'')+' '+(ex?'has-exchange':'')+' '+(ret?'has-return':'')+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||'Sipariş')+' — '+escapeHtml(o.customer||'')+chips+'</div><div class="preview">'+fmtDate(o.orderedAt)+' • '+escapeHtml(o.status||'Durum yok')+' • '+escapeHtml(o.paymentStatus||'')+' • '+amount+'</div></div><span class="badge '+badgeClass+'">'+badgeText+'</span></div>'+orderProductsHtml(o)+'</div>'}
   function productCard(p){var variantText=(p.variants||[]).slice(0,3).map(function(v){return [v.sku, v.variantText].filter(Boolean).join(' • ')}).filter(Boolean).join(' / '); var cats=(p.categoryNames||[]).slice(0,3).map(function(c){return '<span class="chip">'+escapeHtml(c)+'</span>'}).join(''); return '<div class="product-card">'+imgHtml(p.image,'large')+'<div><div class="name">'+escapeHtml(p.name||'Ürün')+'</div><div class="preview">Stok: '+Number(p.totalStock||0)+' • Varyant: '+Number(p.variantCount||0)+'</div><div class="preview">'+escapeHtml(variantText||'Varyant bilgisi yok')+'</div><div class="chips">'+cats+'</div></div></div>'}
   function readyProductRow(p){var orderText=(p.orders||[]).slice(0,6).map(function(o){return escapeHtml(o.orderNumber)+' × '+Number(o.quantity||0)}).join(' • '); return '<div class="product-row">'+imgHtml(p.image,'')+'<div><div class="name">'+escapeHtml(p.name||'Ürün')+'</div><div class="preview">'+(p.sku?'SKU: '+escapeHtml(p.sku)+' • ':'')+orderText+'</div></div><div class="qty">'+Number(p.quantity||0)+'</div></div>'}
   function collectionCard(c){var productNames=(c.products||[]).slice(0,5).map(function(p){return escapeHtml(p.name)}).join(' • '); return '<div class="collection-card">'+imgHtml(c.image,'large')+'<div><div class="name">'+escapeHtml(c.name||'Koleksiyon')+'</div><div class="preview">'+Number(c.productCount||0)+' ürün</div><div class="preview" style="white-space:normal">'+productNames+'</div></div></div>'}
@@ -7083,7 +7251,9 @@ function addExchangeRecord(data) {
       financeNote: String(change.financeNote || "").slice(0, 240),
       financeLink: String(change.financeLink || "").slice(0, 1000),
       ikasSyncStatus: String(change.ikasSyncStatus || "").slice(0, 80),
-      ikasSyncError: String(change.ikasSyncError || "").slice(0, 500)
+      ikasSyncError: String(change.ikasSyncError || "").slice(0, 500),
+      ikasExchangeOrderId: String(change.ikasExchangeOrderId || "").slice(0, 180),
+      ikasExchangeOrderNumber: String(change.ikasExchangeOrderNumber || "").slice(0, 80)
     })).filter((change) => change.fromName || change.toProductName) : [],
     reason: String(data.reason || "").slice(0, 120),
     note: String(data.note || "").slice(0, 1000),
