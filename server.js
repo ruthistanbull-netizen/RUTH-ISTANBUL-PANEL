@@ -7460,6 +7460,69 @@ function adminHtml(serverAdmin) {
   }
 }
 
+
+
+/* V139: requested bigger Ruth logos */
+@media(min-width:821px){
+  :root{
+    --sidebar-w:380px !important;
+    --top-h:82px !important;
+  }
+  .sidebar{
+    grid-template-rows:126px 1fr auto !important;
+  }
+  .ruth-side-logo-head{
+    min-height:126px !important;
+    height:126px !important;
+    padding:8px 10px !important;
+    gap:2px !important;
+    justify-content:flex-start !important;
+    align-items:center !important;
+  }
+  .ruth-sidebar-animal-free{
+    width:104px !important;
+    height:104px !important;
+    min-width:104px !important;
+    margin-right:-2px !important;
+  }
+  .ruth-side-logo-head .ruth-sidebar-full-logo{
+    width:260px !important;
+    max-width:260px !important;
+    height:104px !important;
+    object-fit:contain !important;
+    object-position:left center !important;
+    margin-left:-2px !important;
+  }
+  .avatar.animal-mark{
+    width:68px !important;
+    height:68px !important;
+    min-width:68px !important;
+    border-radius:50% !important;
+  }
+  .avatar .ruth-avatar-img,
+  .avatar .ruth-animal-img{
+    width:98% !important;
+    height:98% !important;
+    max-width:98% !important;
+    max-height:98% !important;
+  }
+  .top-actions{
+    gap:16px !important;
+  }
+}
+/* Mini menüde soldaki logo taşmasın */
+.app.nav-mini .ruth-side-logo-head{
+  min-height:82px !important;
+  height:82px !important;
+  padding:8px 6px !important;
+}
+.app.nav-mini .ruth-sidebar-animal-free{
+  width:54px !important;
+  height:54px !important;
+  min-width:54px !important;
+  margin:0 !important;
+}
+
 </style>
 </head>
 <body>
