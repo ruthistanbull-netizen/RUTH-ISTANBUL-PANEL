@@ -595,7 +595,35 @@ async function handleAdminApi(req, res, url) {
 
   if (req.method === "POST" && pathname === "/api/admin/returns") {
     const body = await readJson(req, 2_000_000);
+    let ikasSynced = false;
+    let ikasErrorMsg = "";
+
+    try {
+      await processIkasReturn(body);
+      ikasSynced = true;
+    }
+  // Değişim endpoint'i
+  if (req.method === "POST" && pathname === "/api/admin/exchange") {
+    const body = await readJson(req, 2_000_000);
+    try {
+      const result = await processIkasSameOrderExchangeLifecycle(body);
+      return sendJson(res, { ok: true, result });
+    } catch (error) {
+      console.error("ikas exchange error:", error);
+      return sendJson(res, { ok: false, error: error.message || "Değişim işlemi başarısız" });
+    }
+  }
+ catch (error) {
+      ikasErrorMsg = error && error.message ? error.message : "İkas iade hatası";
+      console.error("ikas return sync failed:", ikasErrorMsg);
+    }
+
+    body.ikasSyncStatus = ikasSynced ? "success" : "failed";
+    body.ikasSyncError = ikasErrorMsg;
+
     const record = addReturnRecord(body || {});
+    return sendJson(res, { ok: true, returnRecord: record, ikasSynced, ikasErrorMsg });
+  });
     return sendJson(res, { ok: true, returnRecord: record });
   }
 
@@ -7215,11 +7243,61 @@ function money(v){return '₺ '+Number(v||0).toLocaleString('tr-TR',{maximumFrac
   }
   function returnDetailCard(o){
     var rec=orderReturnRecord(o);
+    var syncNote = (rec && rec.ikasSyncStatus === 'success')
+      ? '<div class="exchange-sync-hint" style="color:#77cc92 !important; margin-top:8px;">Bu iade ikas tarafına başarıyla işlendi ve stoğa eklendi.</div>'
+      : (rec && rec.ikasSyncError ? '<div class="exchange-sync-hint" style="color:#ff8a7a !important; margin-top:8px;">İkas aktarım hatası: '+escapeHtml(rec.ikasSyncError)+'</div>' : '');
+
     var items=(o.items||[]).map(function(i,idx){return '<label class="return-item" data-line-id="'+escapeHtml(i.id||idx)+'"><input type="checkbox" class="return-check" '+(rec?'checked':'')+'>'+imgHtml(i.image,'')+'<div><div class="name">'+escapeHtml(i.name||'Ürün')+'</div><div class="preview">'+(i.sku?'SKU: '+escapeHtml(i.sku)+' • ':'')+'Sipariş adedi: '+Number(i.quantity||0)+'</div></div><input class="input return-qty" type="number" min="1" max="'+Number(i.quantity||1)+'" value="'+Number(i.quantity||1)+'"></label>'}).join('');
+    
+    return '<div class="return-detail-card" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+(rec?'<span class="return-chip">İade yapıldı</span>':'')+'</div><div class="preview">'+escapeHtml(o.customer||'Müşteri')+'</div></div></div>'+items+'<div class="return-actions"><div class="field"><label>İade notu / sebebi</label><textarea class="textarea return-reason" placeholder="Örn: müşteri ürünü iade etmek istiyor">'+escapeHtml(rec&&rec.reason?rec.reason:'')+'</textarea></div><button class="btn red return-save" data-order-id="'+escapeHtml(o.id)+'">İadeyi Kaydet</button></div>'+syncNote+'</div>';
+  }).join('');
     return '<div class="return-detail-card" data-order-id="'+escapeHtml(o.id)+'"><div class="row"><div><div class="name">'+escapeHtml(o.number||o.orderNumber||'Sipariş')+(rec?'<span class="return-chip">İade yapıldı</span>':'')+'</div><div class="preview">'+escapeHtml(o.customer||'Müşteri')+'</div></div></div>'+items+'<div class="return-actions"><div class="field"><label>İade notu / sebebi</label><textarea class="textarea return-reason" placeholder="Örn: müşteri ürünü iade etmek istiyor">'+escapeHtml(rec&&rec.reason?rec.reason:'')+'</textarea></div><button class="btn red return-save" data-order-id="'+escapeHtml(o.id)+'">İadeyi Kaydet</button></div></div>';
   }
   function saveReturnForOrder(orderId){
     var o=(ikasSummary.orders||[]).find(function(x){return String(x.id)===String(orderId)}); if(!o)return;
+    var card=null; qsa('.return-detail-card').forEach(function(x){if(String(x.getAttribute('data-order-id'))===String(orderId))card=x}); if(!card)return;
+    var items=[];
+    Array.prototype.slice.call(card.querySelectorAll('.return-item')).forEach(function(row){
+      var chk=row.querySelector('.return-check'); if(!chk||!chk.checked)return;
+      var lineId=row.getAttribute('data-line-id')||'';
+      var item=(o.items||[]).find(function(i,idx){return String(i.id||idx)===String(lineId)})||{};
+      var qty=row.querySelector('.return-qty');
+      items.push({lineId:lineId,name:item.name||'Ürün',sku:item.sku||'',quantity:Number(item.quantity||0),selectedQuantity:Number(qty&&qty.value||item.quantity||1)});
+    });
+    if(!items.length){toast('İade edilecek ürün seç.');return;}
+    
+    var reason=card.querySelector('.return-reason');
+    var btn=card.querySelector('.return-save');
+    if(btn){btn.disabled=true; btn.textContent='İşleniyor...';}
+
+    api('/api/admin/returns',{
+      method:'POST',
+      body:JSON.stringify({
+        customerName:o.customer||'',
+        customerPhone:o.phone||'',
+        customerEmail:o.email||'',
+        orderId:o.id,
+        orderNumber:o.orderNumber||'',
+        orderDisplay:o.number||o.orderNumber||'',
+        items:items,
+        reason:reason&&reason.value||''
+      })
+    }).then(function(res){
+      if(res.ikasSynced) {
+        toast('İade ikas'a işlendi ve stoğa eklendi');
+      } else {
+        alert('Panelde kaydedildi ancak İkas'a işlenemedi: ' + (res.ikasErrorMsg || 'Bilinmeyen hata'));
+      }
+      return loadReturnRecords();
+    }).then(function(){
+      renderReturn();
+      renderIkas();
+    }).catch(function(err){
+      alert('İade kaydedilemedi: '+err.message);
+    }).finally(function(){
+      if(btn){btn.disabled=false; btn.textContent='İadeyi Kaydet';}
+    });
+  }); if(!o)return;
     var card=null; qsa('.return-detail-card').forEach(function(x){if(String(x.getAttribute('data-order-id'))===String(orderId))card=x}); if(!card)return;
     var items=[];
     Array.prototype.slice.call(card.querySelectorAll('.return-item')).forEach(function(row){
@@ -8002,6 +8080,17 @@ function addReturnRecord(data) {
       selectedQuantity: Number(item.selectedQuantity || item.quantity || 1)
     })).filter((item) => item.name || item.lineId) : [],
     reason: String(data.reason || "").slice(0, 1000),
+    ikasSyncStatus: String(data.ikasSyncStatus || ""),
+    ikasSyncError: String(data.ikasSyncError || ""),
+    createdAt: now,
+    updatedAt: now
+  };
+  db.returns = db.returns.filter((record) => String(record.orderId) !== item.orderId);
+  db.returns.push(item);
+  saveReturnDb(db);
+  return item;
+})).filter((item) => item.name || item.lineId) : [],
+    reason: String(data.reason || "").slice(0, 1000),
     createdAt: now,
     updatedAt: now
   };
@@ -8412,3 +8501,54 @@ if (require.main === module) {
 }
 
 module.exports = { start, stop, server };
+
+async function processIkasReturn(inputData) {
+  if (!ikasConfigured()) throw new Error("ikas_not_configured");
+  const orderId = String(inputData.orderId || "").trim();
+  if (!orderId) throw new Error("orderId_required");
+
+  const items = Array.isArray(inputData.items) ? inputData.items : [];
+  if (!items.length) throw new Error("items_required");
+
+  const contextOrder = await findIkasOrderForLifecycle(orderId);
+  const stockLocationId = String(
+    (contextOrder && contextOrder.stockLocationId) || process.env.IKAS_STOCK_LOCATION_ID || process.env.RUTH_IKAS_STOCK_LOCATION_ID || ""
+  ).trim();
+
+  const orderRefundLines = items.map((item) => {
+    const lineId = String(item.lineId || "").split("::")[0];
+    const contextItem = contextOrder ? (contextOrder.items || []).find(i => String(i.id).split("::")[0] === lineId) : null;
+    const price = contextItem ? Number(contextItem.unitPrice || 0) : 0;
+    return {
+      orderLineItemId: lineId,
+      price: price,
+      quantity: Math.max(1, Number(item.selectedQuantity || item.quantity || 1)),
+      restockItems: true
+    };
+  }).filter(l => l.orderLineItemId);
+
+  if (!orderRefundLines.length) throw new Error("refund_lines_required");
+
+  const query = `
+    mutation RuthProcessReturn($input: OrderRefundInput!) {
+      refundOrderLine(input: $input) {
+        id
+        orderNumber
+        status
+      }
+    }
+  `;
+  const input = {
+    orderId,
+    stockLocationId,
+    reason: String(inputData.reason || "Ruth panel iade işlemi").slice(0, 500),
+    forceRefund: false,
+    refundGift: false,
+    refundShipping: false,
+    sendNotificationToCustomer: true,
+    orderRefundLines
+  };
+
+  const data = await ikasGraphQL(query, { input }, "ikas process return");
+  return data && data.refundOrderLine ? data.refundOrderLine : null;
+}
