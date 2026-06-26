@@ -649,6 +649,132 @@ async function handleAdminApi(req, res, url) {
     return sendJson(res, { ok: true });
   }
 
+  if (req.method === "GET" && pathname === "/api/admin/ikas/return-exchange-lifecycle-debug") {
+    try {
+      const typeRef = `
+        kind
+        name
+        ofType {
+          kind
+          name
+          ofType {
+            kind
+            name
+            ofType {
+              kind
+              name
+              ofType {
+                kind
+                name
+                ofType {
+                  kind
+                  name
+                }
+              }
+            }
+          }
+        }
+      `;
+      const query = `
+        query RuthReturnExchangeLifecycleDebug {
+          schema: __schema {
+            mutationType {
+              fields {
+                name
+                args {
+                  name
+                  type { ${typeRef} }
+                }
+                type { ${typeRef} }
+              }
+            }
+            types {
+              kind
+              name
+              inputFields {
+                name
+                type { ${typeRef} }
+              }
+              fields {
+                name
+                args {
+                  name
+                  type { ${typeRef} }
+                }
+                type { ${typeRef} }
+              }
+              enumValues { name }
+            }
+          }
+          OrderRefundInput: __type(name:"OrderRefundInput") {
+            kind
+            name
+            inputFields { name type { ${typeRef} } }
+          }
+          OrderRefundLineInput: __type(name:"OrderRefundLineInput") {
+            kind
+            name
+            inputFields { name type { ${typeRef} } }
+          }
+          CreateOrderWithTransactionsInput: __type(name:"CreateOrderWithTransactionsInput") {
+            kind
+            name
+            inputFields { name type { ${typeRef} } }
+          }
+          UpdateOrderInput: __type(name:"UpdateOrderInput") {
+            kind
+            name
+            inputFields { name type { ${typeRef} } }
+          }
+          OrderLineItemInput: __type(name:"OrderLineItemInput") {
+            kind
+            name
+            inputFields { name type { ${typeRef} } }
+          }
+          GenerateOrderPaymentLinkInput: __type(name:"GenerateOrderPaymentLinkInput") {
+            kind
+            name
+            inputFields { name type { ${typeRef} } }
+          }
+        }
+      `;
+      const data = await ikasGraphQL(query, {}, "ikas return exchange lifecycle debug");
+      const schema = (data && data.schema) || {};
+      const mutationFields = (((schema.mutationType || {}).fields) || []).filter((field) => /refund|return|exchange|order|package|payment|transaction|line|fulfill|cancel/i.test(field.name || ""));
+      const relevantTypes = (schema.types || []).filter((type) => {
+        const name = String(type && type.name || "");
+        if (!name || name.startsWith("__")) return false;
+        return /Refund|Return|Exchange|Order|Line|Package|Payment|Transaction|Stock|Fulfill|Cancel/i.test(name);
+      }).map((type) => ({
+        kind: type.kind,
+        name: type.name,
+        inputFields: type.inputFields || null,
+        fields: type.fields || null,
+        enumValues: type.enumValues || null
+      }));
+
+      const likelyFlow = mutationFields.filter((field) => /refund|return|exchange/i.test(field.name || ""));
+      const orderEditFlow = mutationFields.filter((field) => /updateOrder|orderLine|paymentLink|transaction|package/i.test(field.name || ""));
+      return sendJson(res, {
+        ok: true,
+        message: "Bu çıktı sadece ikas API şemasını okur, siparişte işlem yapmaz. Return/refund lifecycle gerçekten mümkün mü anlamak için bu çıktıyı gönder.",
+        likelyReturnRefundMutations: likelyFlow,
+        orderPaymentPackageMutations: orderEditFlow,
+        topLevelInputTypes: {
+          OrderRefundInput: data.OrderRefundInput || null,
+          OrderRefundLineInput: data.OrderRefundLineInput || null,
+          CreateOrderWithTransactionsInput: data.CreateOrderWithTransactionsInput || null,
+          UpdateOrderInput: data.UpdateOrderInput || null,
+          OrderLineItemInput: data.OrderLineItemInput || null,
+          GenerateOrderPaymentLinkInput: data.GenerateOrderPaymentLinkInput || null
+        },
+        relevantTypes
+      });
+    } catch (error) {
+      return sendJson(res, { ok: false, error: "return_exchange_lifecycle_debug_failed", message: error && error.message ? error.message : "return_exchange_lifecycle_debug_failed" }, 200);
+    }
+  }
+
   if (req.method === "GET" && pathname === "/api/admin/ikas/sales-channel-debug") {
     try {
       const detailed = await fetchIkasSalesChannelsDetailed();
@@ -5786,6 +5912,15 @@ function adminHtml(serverAdmin) {
   color:#d8b66f !important;
 }
 
+
+
+/* V121: return/exchange lifecycle debug */
+#ikasReturnExchangeDebugOut{
+  max-height:420px;
+  overflow:auto;
+  white-space:pre-wrap;
+}
+
 </style>
 </head>
 <body>
@@ -5954,7 +6089,7 @@ function adminHtml(serverAdmin) {
         </div>
 
         <div id="page-integration" class="page">
-          <div class="page-head"><div><div class="page-title">ikas Entegrasyonu</div><div class="page-sub">Sipariş, ürün, koleksiyon ve hazırlık listelerini ayrı ayrı yönet.</div></div><div class="head-tools"><button class="btn gold" data-route="ikas-orders">Tüm Siparişler →</button><button id="ikasVariantDebugBtn" class="btn ghost">Varyant / Mutation Kontrol Et</button><button id="ikasInputDebugBtn" class="btn ghost">Ödeme / İade Alanlarını Kontrol Et</button><button id="ikasOrderLineDebugBtn" class="btn ghost">Sipariş Satırı Alanlarını Kontrol Et</button><button id="ikasSalesChannelDebugBtn" class="btn ghost">Satış Kanalını Kontrol Et</button></div></div>
+          <div class="page-head"><div><div class="page-title">ikas Entegrasyonu</div><div class="page-sub">Sipariş, ürün, koleksiyon ve hazırlık listelerini ayrı ayrı yönet.</div></div><div class="head-tools"><button class="btn gold" data-route="ikas-orders">Tüm Siparişler →</button><button id="ikasVariantDebugBtn" class="btn ghost">Varyant / Mutation Kontrol Et</button><button id="ikasInputDebugBtn" class="btn ghost">Ödeme / İade Alanlarını Kontrol Et</button><button id="ikasOrderLineDebugBtn" class="btn ghost">Sipariş Satırı Alanlarını Kontrol Et</button><button id="ikasReturnExchangeDebugBtn" class="btn ghost">İade/Değişim Lifecycle Kontrol Et</button><button id="ikasSalesChannelDebugBtn" class="btn ghost">Satış Kanalını Kontrol Et</button></div></div>
           <div class="modules">
             <button class="module" data-route="ikas-orders"><div class="module-ico"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6.5 7.5h11l1.1 13h-13.2l1.1-13Z"/><path d="M9 7.5a3 3 0 0 1 6 0"/><path d="M9 12h6"/><path d="M9 15.5h4"/></svg></div><h3>TÜM SİPARİŞLER</h3><p>En güncel siparişler en üstte, durumları ve ürünleriyle görünür.</p><span class="btn gold">Aç →</span></button>
             <button class="module" data-route="ikas-products"><div class="module-ico">◇</div><h3>TÜM ÜRÜNLER</h3><p>Ürün adı, fotoğraf, varyant, SKU ve stok bilgileri.</p><span class="btn gold">Aç →</span></button>
@@ -5971,7 +6106,7 @@ function adminHtml(serverAdmin) {
         <div id="page-ikas-collections" class="page"><div class="page-head"><div><div class="page-title">Tüm Koleksiyonlar</div><div class="page-sub">ikas kategori/koleksiyonları ve içindeki ürünler.</div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div><div id="ikasAllCollections" class="panel-body"><div class="empty">Koleksiyonlar yükleniyor...</div></div></div>
         <div id="page-ikas-ready-orders" class="page"><div class="page-head"><div><div class="page-title">Hazırlanacak Siparişler</div><div class="page-sub">Sadece kargoya hazır durumundaki siparişler.</div></div><div class="head-tools"><div class="date-filter" data-date-filter><select class="date-select" data-date-preset><option value="today">Bugün</option><option value="yesterday">Dün</option><option value="this_week">Bu hafta</option><option value="last_week">Geçen hafta</option><option value="this_month">Bu ay</option><option value="last_month">Geçen ay</option><option value="this_year">Bu yıl</option><option value="custom">Özel tarih</option><option value="all">Tüm zamanlar</option></select><div class="date-custom"><input class="date-input" type="date" data-date-start><span class="time">-</span><input class="date-input" type="date" data-date-end></div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div></div><div id="ikasReadyOrders" class="panel-body"><div class="empty">Hazırlanacak siparişler yükleniyor...</div></div></div>
         <div id="page-ikas-ready-products" class="page"><div class="page-head"><div><div class="page-title">Hazırlanacak Ürün Toplamları</div><div class="page-sub">Kargoya hazır siparişlerden birleştirilmiş ürün hazırlık listesi.</div></div><div class="head-tools"><div class="date-filter" data-date-filter><select class="date-select" data-date-preset><option value="today">Bugün</option><option value="yesterday">Dün</option><option value="this_week">Bu hafta</option><option value="last_week">Geçen hafta</option><option value="this_month">Bu ay</option><option value="last_month">Geçen ay</option><option value="this_year">Bu yıl</option><option value="custom">Özel tarih</option><option value="all">Tüm zamanlar</option></select><div class="date-custom"><input class="date-input" type="date" data-date-start><span class="time">-</span><input class="date-input" type="date" data-date-end></div></div><button class="btn gold ikas-refresh">Senkronize Et</button></div></div><div id="ikasReadyProductTotals" class="panel-body"><div class="empty">Ürün toplamları yükleniyor...</div></div></div>
-        <div class="card"><div class="card-title">Varyant ve Mutation API Kontrolü</div><pre id="ikasVariantDebugOut" class="debug-box">Henüz kontrol edilmedi. Butona basınca varyant başlık alanları ve sipariş düzenleme mutationları görünecek.</pre><div class="card"><div class="card-title">Ödeme / İade Input Kontrolü</div><pre id="ikasInputDebugOut" class="debug-box">Henüz kontrol edilmedi.</pre><div class="card"><div class="card-title">Sipariş Satırı Input Kontrolü</div><pre id="ikasOrderLineDebugOut" class="debug-box">Henüz kontrol edilmedi.</pre><div class="card"><div class="card-title">Satış Kanalı Kontrolü</div><pre id="ikasSalesChannelDebugOut" class="debug-box">Henüz kontrol edilmedi.</pre></div></div></div></div><div id="page-notifications" class="page"><div class="page-head"><div><div class="page-title">Bildirimler</div><div class="page-sub">Telefona canlı destek bildirimi gelsin diye bu cihazı kaydet.</div></div></div><div class="module-grid"><div class="module" style="align-items:flex-start;text-align:left"><div class="module-ico">🔔</div><h3>Telefon Bildirimleri</h3><p id="pushStatusText">Bildirim durumu kontrol ediliyor...</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button id="pushSetupBtn" class="btn gold" type="button">Bu Telefonda Bildirimi Aç</button><button id="pushTestBtn" class="btn ghost" type="button">Test Bildirimi Gönder</button></div><p class="page-sub" style="margin-top:12px">iPhone kullanıyorsan: Safari’de paneli aç → Paylaş → Ana Ekrana Ekle → ana ekrandan aç → bu butona bas. Safari sekmesinden bildirim gelmeyebilir.</p></div></div></div>
+        <div class="card"><div class="card-title">Varyant ve Mutation API Kontrolü</div><pre id="ikasVariantDebugOut" class="debug-box">Henüz kontrol edilmedi. Butona basınca varyant başlık alanları ve sipariş düzenleme mutationları görünecek.</pre><div class="card"><div class="card-title">Ödeme / İade Input Kontrolü</div><pre id="ikasInputDebugOut" class="debug-box">Henüz kontrol edilmedi.</pre><div class="card"><div class="card-title">Sipariş Satırı Input Kontrolü</div><pre id="ikasOrderLineDebugOut" class="debug-box">Henüz kontrol edilmedi.</pre><div class="card"><div class="card-title">İade / Değişim Lifecycle Kontrolü</div><pre id="ikasReturnExchangeDebugOut" class="debug-box">Henüz kontrol edilmedi. Bu kontrol siparişte işlem yapmaz, sadece ikas API şemasını okur.</pre><div class="card"><div class="card-title">Satış Kanalı Kontrolü</div><pre id="ikasSalesChannelDebugOut" class="debug-box">Henüz kontrol edilmedi.</pre></div></div></div></div></div><div id="page-notifications" class="page"><div class="page-head"><div><div class="page-title">Bildirimler</div><div class="page-sub">Telefona canlı destek bildirimi gelsin diye bu cihazı kaydet.</div></div></div><div class="module-grid"><div class="module" style="align-items:flex-start;text-align:left"><div class="module-ico">🔔</div><h3>Telefon Bildirimleri</h3><p id="pushStatusText">Bildirim durumu kontrol ediliyor...</p><div style="display:flex;gap:10px;flex-wrap:wrap"><button id="pushSetupBtn" class="btn gold" type="button">Bu Telefonda Bildirimi Aç</button><button id="pushTestBtn" class="btn ghost" type="button">Test Bildirimi Gönder</button></div><p class="page-sub" style="margin-top:12px">iPhone kullanıyorsan: Safari’de paneli aç → Paylaş → Ana Ekrana Ekle → ana ekrandan aç → bu butona bas. Safari sekmesinden bildirim gelmeyebilir.</p></div></div></div>
         <div id="page-products" class="page"><div class="page-title">Ürünler</div><p class="page-sub">ikas ürün listesi bağlanınca burada görünecek.</p></div>
         <div id="page-reports" class="page"><div class="page-title">Raporlar</div><p class="page-sub">Satış ve destek raporları burada hazırlanacak.</p></div>
         <div id="page-settings" class="page"><div class="page-title">Ayarlar</div><p class="page-sub">Panel ayarları burada olacak.</p></div>
@@ -7145,6 +7280,17 @@ function renderExchangeNotes(){
     }).catch(function(err){
       if(out)out.textContent='Hata: '+(err&&err.message?err.message:err);
       toast('Sipariş satırı kontrolü hata verdi');
+    });
+  });
+  on('ikasReturnExchangeDebugBtn','click',function(){
+    var out=$('ikasReturnExchangeDebugOut');
+    if(out)out.textContent='Kontrol ediliyor...';
+    api('/api/admin/ikas/return-exchange-lifecycle-debug').then(function(d){
+      if(out)out.textContent=JSON.stringify(d,null,2);
+      toast('İade/değişim lifecycle alanları kontrol edildi');
+    }).catch(function(err){
+      if(out)out.textContent='Hata: '+(err&&err.message?err.message:err);
+      toast('İade/değişim lifecycle kontrolü hata verdi');
     });
   });
   on('ikasSalesChannelDebugBtn','click',function(){
