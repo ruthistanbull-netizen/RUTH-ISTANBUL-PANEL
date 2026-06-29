@@ -1,0 +1,28 @@
+RUTH ISTANBUL PANEL TEMA GÜNCELLEMESİ
+
+Bu pakette panelin çalışan server/API mantığına dokunulmadan görünen admin tasarımı Ruth Istanbul sitesinin lüks koyu/gold temasına göre düzenlendi.
+
+Yapılanlar:
+- Admin panelinin tüm sayfaları için final Ruth Istanbul tema katmanı eklendi.
+- Giriş ekranı, sidebar, üst bar, panel kartları, butonlar, inputlar, listeler, sipariş/değişim/iade kartları aynı görsel dile çekildi.
+- Cinzel + Montserrat font sistemi eklendi.
+- Butonlara, menü linklerine, kartlara ve sayfa geçişlerine yumuşak animasyonlar eklendi.
+- iPhone Safari Ana Ekrana Ekle kullanımına uygun standalone/safe-area düzenleri güçlendirildi.
+- Mobilde üst bar, yan menü, sohbet alanı ve form alanları uygulama gibi kullanılacak şekilde düzenlendi.
+- Masaüstünde panel geniş ekran düzeni korunarak daha premium kart/blur/gold görünümü verildi.
+
+Dokunulmayanlar:
+- API endpointleri
+- ikas bağlantı kodları
+- canlı destek mesaj sistemi
+- değişim/iade kayıt mantığı
+- bildirim sistemi
+- Face ID / passkey mantığı
+- veri kaydetme dosyaları ve çalışma sistemi
+
+Çalıştırma:
+npm install
+npm start
+
+Panel:
+/admin/
