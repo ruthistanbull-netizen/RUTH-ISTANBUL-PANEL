@@ -55,12 +55,20 @@
       ...extra
     };
     try {
+      const pixelUrl = new URL(eventUrl, location.href);
+      Object.keys(payload).forEach((key) => pixelUrl.searchParams.set(key, String(payload[key] == null ? "" : payload[key])));
+      pixelUrl.searchParams.set("pixel", "1");
+      pixelUrl.searchParams.set("r", String(Date.now()) + String(Math.random()).slice(2));
+      const img = new Image();
+      img.referrerPolicy = "no-referrer-when-downgrade";
+      img.src = pixelUrl.toString();
+    } catch (error) {}
+    try {
       const body = JSON.stringify(payload);
       if (navigator.sendBeacon) {
-        const blob = new Blob([body], { type: "application/json" });
-        if (navigator.sendBeacon(eventUrl, blob)) return;
+        try { navigator.sendBeacon(eventUrl, new Blob([body], { type: "application/json" })); } catch (error) {}
       }
-      fetch(eventUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
+      fetch(eventUrl, { method: "POST", mode: "cors", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
     } catch (error) {}
   }
 
@@ -84,6 +92,8 @@
   }
 
   ruthTrackThrottled("session", "session", 30 * 60 * 1000);
+  window.addEventListener("pageshow", () => ruthTrackThrottled("session_pageshow", "session", 30 * 60 * 1000));
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) ruthTrackThrottled("session_visible", "session", 30 * 60 * 1000); });
   setTimeout(ruthCheckRouteForTracking, 800);
   window.addEventListener("popstate", () => setTimeout(ruthCheckRouteForTracking, 250));
   ["pushState", "replaceState"].forEach((name) => {

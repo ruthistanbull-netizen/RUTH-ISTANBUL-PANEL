@@ -1,0 +1,8 @@
+Ruth Istanbul Panel - Trafik kayıt güvenilirlik düzeltmesi
+
+- /api/event artık GET + POST kabul eder.
+- CORS başlıkları tüm JSON yanıtlara ve OPTIONS isteklerine eklendi.
+- Ikas özel kodundaki takip artık fetch/sendBeacon yanında 1x1 pixel GET de atar.
+- Bu sayede ikas/custom html tarafında CORS veya preflight takılsa bile oturum kaydı düşer.
+- Güncel ruth-ikas-widget-manuel-canli-destek.html dosyası ikas özel kod alanına yeniden yapıştırılmalıdır.
+- Eski ziyaretler geriye dönük gelmez; güncel koddan sonra yeni ziyaretler sayılmaya başlar.
