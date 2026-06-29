@@ -1,0 +1,13 @@
+RUTH ISTANBUL PANEL - Otomatik İstatistik Yenileme
+
+Yapılanlar:
+- Genel Bakış sayfasındaki trafik kartları 10 saniyede bir otomatik yenilenir.
+- Panel açıkken sayfayı yenilemeden Oturum / Sepet / Ödemeye Ulaşan / Terk Edilen Sepet sayıları güncellenir.
+- Panel sekmesi arka plandaysa gereksiz istek atmaz; tekrar açılınca güncel veriyi çeker.
+- Yeni hafif endpoint eklendi: /api/admin/traffic/statistics
+- Bu endpoint Ikas API'ye yüklenmeden sadece panelin kendi trafik takip kayıtlarını hızlıca okur.
+- Tarih filtresi değişince istatistikler ve trafik kartları yeniden hesaplanır.
+
+Not:
+- Bu sistemin çalışması için güncel ruth-ikas-widget-manuel-canli-destek.html dosyası Ikas özel kod alanında olmalı.
+- Eski ziyaretler geriye dönük gelmez; kod kurulduktan sonraki ziyaretler sayılır.
