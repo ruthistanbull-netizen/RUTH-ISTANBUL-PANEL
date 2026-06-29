@@ -1,0 +1,21 @@
+RUTH Istanbul Panel Tema V2
+
+Bu sürümde panel tasarımı koyu/gold görünümden çıkarılıp yeni Ruth Istanbul sitesindeki açık ivory/cream renk paletine taşındı.
+
+Yapılanlar:
+- Tüm panel renkleri yeni site paletine göre güncellendi: ivory, cream, ink, gold, bronze.
+- Sol menü, üst bar, kartlar, tablolar, inputlar, butonlar ve popup alanları açık Ruth temasına çevrildi.
+- Siyah Ruth Istanbul logosu eklendi ve sol menü logosu bu logoyla değiştirildi.
+- Profil/giriş küçük logo alanlarında siyah R logo kullanıldı.
+- Menü sembolleri daha sade ve temaya uygun çizgi ikonlarla değiştirildi.
+- Sayfa/kart sembolleri ve ikon kutuları yeni temaya göre gold-border / cream-box şekilde düzenlendi.
+- Mobil Safari ana ekrana ekleme görünümü açık temaya göre düzenlendi.
+- Buton, kart ve menü hover/tıklama animasyonları korundu ve açık temaya uyarlandı.
+
+Temel sistem korunmuştur:
+- API endpointleri
+- canlı destek akışı
+- değişim/iade kayıt mantığı
+- sipariş/ürün veri mantığı
+- passkey/Face ID mantığı
+- veri dosyaları ve environment ayarları
