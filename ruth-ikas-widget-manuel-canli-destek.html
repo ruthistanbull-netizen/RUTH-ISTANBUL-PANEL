@@ -4,6 +4,7 @@
   window.RUTH_MANUAL_CHAT = {
     apiUrl: "https://ruthie-lmc5.onrender.com/api/chat",
     updatesUrl: "https://ruthie-lmc5.onrender.com/api/chat/updates",
+    eventUrl: "https://ruthie-lmc5.onrender.com/api/event",
     whatsappNumber: "908503469789",
     brandName: "RUTH ISTANBUL",
     supportName: "Canlı Destek",
@@ -19,6 +20,7 @@
   const config = {
     apiUrl: "",
     updatesUrl: "",
+    eventUrl: "",
     whatsappNumber: "908503469789",
     brandName: "RUTH ISTANBUL",
     supportName: "Canlı Destek",
@@ -36,6 +38,79 @@
   const lastAdminKey = "ruth_manual_chat_last_admin_at";
   const createSessionId = () => `ruth_${Date.now()}_${Math.random().toString(16).slice(2)}`;
   const sessionId = getSessionId();
+  const eventUrl = config.eventUrl || (config.apiUrl ? String(config.apiUrl).replace(/\/api\/chat\/?$/, "/api/event") : "");
+  const sentKeyPrefix = "ruth_panel_track_sent_";
+
+  function ruthSendTrack(type, extra = {}) {
+    if (!eventUrl) return;
+    const payload = {
+      type,
+      sessionId,
+      url: location.href,
+      path: location.pathname,
+      title: document.title || "",
+      referrer: document.referrer || "",
+      source: "ikas-widget",
+      at: new Date().toISOString(),
+      ...extra
+    };
+    try {
+      const body = JSON.stringify(payload);
+      if (navigator.sendBeacon) {
+        const blob = new Blob([body], { type: "application/json" });
+        if (navigator.sendBeacon(eventUrl, blob)) return;
+      }
+      fetch(eventUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body, keepalive: true }).catch(() => {});
+    } catch (error) {}
+  }
+
+  function ruthTrackThrottled(key, type, ms, extra) {
+    const now = Date.now();
+    const storageKey = sentKeyPrefix + key;
+    let last = 0;
+    try { last = Number(sessionStorage.getItem(storageKey) || localStorage.getItem(storageKey) || 0); } catch (error) {}
+    if (last && now - last < ms) return;
+    try { sessionStorage.setItem(storageKey, String(now)); localStorage.setItem(storageKey, String(now)); } catch (error) {}
+    ruthSendTrack(type, extra || {});
+  }
+
+  function ruthCheckRouteForTracking() {
+    const path = String(location.pathname || "").toLowerCase();
+    const href = String(location.href || "").toLowerCase();
+    ruthTrackThrottled("page_" + path, "page_view", 2 * 60 * 1000);
+    if (/sepet|cart|basket/.test(path)) ruthTrackThrottled("cart_page", "cart", 60 * 1000, { reason: "cart_page" });
+    if (/checkout|odeme|ödeme|payment|pay/.test(path + " " + href)) ruthTrackThrottled("checkout_page", "checkout", 60 * 1000, { reason: "checkout_page" });
+    if (/thank|tesekkur|teşekkür|success|siparis-basarili|order-confirmation|order-success/.test(path + " " + href)) ruthTrackThrottled("purchase_page", "purchase", 60 * 1000, { reason: "purchase_page" });
+  }
+
+  ruthTrackThrottled("session", "session", 30 * 60 * 1000);
+  setTimeout(ruthCheckRouteForTracking, 800);
+  window.addEventListener("popstate", () => setTimeout(ruthCheckRouteForTracking, 250));
+  ["pushState", "replaceState"].forEach((name) => {
+    const original = history[name];
+    if (typeof original === "function") {
+      history[name] = function() {
+        const result = original.apply(this, arguments);
+        setTimeout(ruthCheckRouteForTracking, 250);
+        return result;
+      };
+    }
+  });
+  document.addEventListener("click", (event) => {
+    const target = event.target && event.target.closest ? event.target.closest("button,a,[role='button'],input[type='submit']") : null;
+    if (!target) return;
+    const text = String(target.innerText || target.value || target.getAttribute("aria-label") || target.getAttribute("title") || "").toLowerCase();
+    const cls = String(target.className || "").toLowerCase();
+    const data = String(target.dataset ? Object.values(target.dataset).join(" ") : "").toLowerCase();
+    const combined = text + " " + cls + " " + data;
+    if (/sepete\s*ekle|add\s*to\s*cart|basket|cart/.test(combined)) {
+      ruthTrackThrottled("cart_click", "cart", 2500, { reason: "add_to_cart_click" });
+    }
+    if (/ödemeye\s*geç|odemeye\s*gec|checkout|payment|pay|satın\s*al|satin\s*al/.test(combined)) {
+      ruthTrackThrottled("checkout_click", "checkout", 10000, { reason: "checkout_click" });
+    }
+  }, true);
+
   const seenMessageIds = new Set();
   let selectedFile = null;
   let pollTimer = null;

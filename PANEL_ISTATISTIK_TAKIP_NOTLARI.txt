@@ -1,0 +1,7 @@
+RUTH PANEL İSTATİSTİK TAKİP NOTLARI
+
+- Ikas API siparişleri çekmeye devam eder. Tarihsel ürün/sipariş adetleri artık her zaman ikas siparişlerini sayfa sayfa alıp panel tarafında tarih filtresiyle hesaplar.
+- Oturum, sepet, ödemeye ulaşan ve terk edilen sepet alanları için ikas analytics API cevap vermezse panel kendi takip verisini kullanır.
+- Bu takip verisinin oluşması için ruth-ikas-widget-manuel-canli-destek.html içindeki güncel kodun ikas özel kod alanına yeniden yapıştırılması gerekir.
+- Eski günlerin oturum/sepet verisi geriye dönük üretilemez; yeni kod eklendikten sonra veri toplamaya başlar.
+- Terk edilen sepet, sepete ekleme yapıp 30 dakika içinde checkout/purchase sinyali gelmeyen session olarak hesaplanır.
