@@ -1,1 +1,0 @@
-Ürün fotoğraflarına önizleme eklendi. Masaüstünde fotoğrafın üzerinde kısa süre bekleyince açılır; mobilde fotoğrafa dokununca açılır. Önizleme ekrani tam ekran olmaz, ürün adı/varyant/adet varsa yanında gösterilir.
