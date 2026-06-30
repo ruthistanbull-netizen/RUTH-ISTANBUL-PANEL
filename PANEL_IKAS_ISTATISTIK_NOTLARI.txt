@@ -1,0 +1,24 @@
+RUTH ISTANBUL PANEL - IKAS ISTATISTIK FIX
+
+Yapılanlar:
+- Genel Bakış sayfasına Ikas mağaza istatistik kartları eklendi:
+  - Oturum Sayısı
+  - Sepet Sayısı
+  - Ödemeye Ulaşan
+  - Terk Edilen Sepet
+- Genel Bakış tarih filtresi bu kartları da etkiler:
+  - Bugün
+  - Dün
+  - Bu hafta
+  - Geçen hafta
+  - Bu ay
+  - Geçen ay
+  - Bu yıl
+  - Özel tarih
+  - Tüm zamanlar
+- /api/admin/ikas/statistics endpointi eklendi.
+- Sipariş / ürün adedi gibi tarihsel istatistikler artık seçili tarih aralığına göre Ikas siparişlerinden yeniden hesaplanır.
+- Sipariş senkronize edildiğinde istatistikler de yenilenir.
+- Ikas analytics/traffic GraphQL alanı mağazada mevcutsa oturum/sepet/checkout/terk edilen sepet canlı gelir. Ikas API bu alanları açmadıysa bu dört trafik kartında çizgi görünür; sipariş ve ürün adetleri yine doğru hesaplanır.
+
+Temel panel sistemi, canlı destek, değişim/iade ve fotoğraf önizleme mantığı korunmuştur.

@@ -1,0 +1,15 @@
+TRAFIK TAKIBI V2
+
+Bu sürümde ikas özel kodu içindeki trafik takibi sohbet widgetı daha önce yüklenmiş olsa bile çalışır.
+
+Kurulum:
+1) Bu projeyi panelinize deploy edin.
+2) ruth-ikas-widget-manuel-canli-destek.html dosyasının tamamını ikas özel kod alanına yapıştırın.
+3) Eski canlı destek kodu varsa silin veya bu dosyayla tamamen değiştirin.
+4) Siteye gizli sekmeden girip 10-15 saniye bekleyin.
+5) Panel > Genel Bakış kısmı 10 saniyede bir otomatik yenilenir.
+
+Kontrol endpointleri:
+/api/event?type=session&sessionId=test123&pixel=1
+/api/admin/traffic/statistics?preset=today
+/api/admin/traffic/debug
